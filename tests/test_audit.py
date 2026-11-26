@@ -22,6 +22,21 @@ def baseline():
 
 
 class AuditTests(unittest.TestCase):
+    def test_russian_output_on_an_english_windows_codepage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'snapshot.json'
+            source.write_text(json.dumps(baseline()), encoding='utf-8')
+            buffer = io.BytesIO()
+            stream = io.TextIOWrapper(buffer, encoding='cp1252')
+            try:
+                with contextlib.redirect_stdout(stream):
+                    code = audit.main(['--snapshot', str(source), '--output', str(Path(temp) / 'reports'), '--lang', 'ru'])
+                stream.flush()
+                self.assertEqual(code, 0)
+                self.assertIn('Нет активных совпадений правил', buffer.getvalue().decode('utf-8'))
+            finally:
+                stream.detach()
+
     def test_documented_cli_commands_in_both_languages(self):
         for language, expected in [('ru', 'Требуется проверка находок'), ('en', 'attention')]:
             help_result = subprocess.run([sys.executable, str(ROOT / 'audit.py'), '--lang', language, '--help'],

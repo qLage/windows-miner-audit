@@ -278,6 +278,10 @@ def make_parser(lang: str) -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    # main() can also be invoked by another Python program on an English Windows host.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     argv = list(sys.argv[1:] if argv is None else argv)
     language_parser = argparse.ArgumentParser(add_help=False)
     language_parser.add_argument('--lang', choices=['ru', 'en'], default='en')
@@ -305,8 +309,4 @@ def main(argv=None) -> int:
 
 
 if __name__ == '__main__':
-    # Keep redirected Russian output readable as UTF-8 on Windows as well as Unix.
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, 'reconfigure'):
-            stream.reconfigure(encoding='utf-8')
     raise SystemExit(main())

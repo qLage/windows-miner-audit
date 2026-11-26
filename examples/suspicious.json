@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "processes": [{"pid": 1234, "path": "C:\\ProgramData\\WindowsTask\\MicrosoftHost.exe", "signature": "NotSigned", "command": "MicrosoftHost.exe -o pool.example:443 --tls --cpu-max-threads-hint=35 --donate-level=1 --token=EXAMPLE"}],
+  "tasks": [{"name": "ExampleCheck", "enabled": true, "command": "C:\\ProgramData\\WindowsTask\\MicrosoftHost.exe"}],
+  "startup": [],
+  "defender": {"paths": [], "extensions": [], "policy_paths": ["C:\\ProgramData"], "policy_extensions": ["*.exe"], "realtime_enabled": true},
+  "hosts": ["# Synthetic fixture; no real system data", "8.8.4.4 download.eset.com"],
+  "acl_blocks": [],
+  "remote": {"rdp_enabled": false, "rdp_listening": false},
+  "health": [{"drive": "C:", "free_gb": 12}],
+  "errors": []
+}

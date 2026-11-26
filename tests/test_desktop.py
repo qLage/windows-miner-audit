@@ -14,6 +14,12 @@ except ImportError:
 
 @unittest.skipIf(gui is None,'Tkinter not installed on this test host')
 class DesktopTests(unittest.TestCase):
+    def test_rounded_corner_mask_has_fractional_coverage(self):
+        mask = desktop_ui.corner_coverage(14)
+        self.assertEqual(mask[0][0], 0)
+        self.assertEqual(mask[-1][-1], 255)
+        self.assertTrue(any(0 < alpha < 255 for row in mask for alpha in row))
+
     def test_both_languages_have_the_same_complete_key_set(self):
         self.assertEqual(set(gui.WORDS['ru']),set(gui.WORDS['en']))
         self.assertTrue(all(gui.WORDS[language].values() for language in ('ru','en')))

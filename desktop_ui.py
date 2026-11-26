@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 from datetime import datetime
 import json
+from functools import lru_cache
 import os
 from pathlib import Path
 import queue
@@ -16,10 +17,10 @@ import zlib
 PALETTES = {
     'dark': dict(bg='#111113', side='#17171b', card='#202025', field='#29292f', line='#35353d',
                  text='#f3f3f7', muted='#a2a2b2', hover='#34343e', accent='#68e0b6', ink='#092a21',
-                 red='#ff939c', amber='#f4c574', blue='#90baff', selected='#283e50'),
+                 red='#ff939c', amber='#f4c574', blue='#90baff', selected='#283e50', scroll='#666672'),
     'light': dict(bg='#f3f4f7', side='#ffffff', card='#ffffff', field='#edeff4', line='#e0e3eb',
                   text='#19283f', muted='#60718a', hover='#e7edf7', accent='#137d60', ink='#ffffff',
-                  red='#b42c45', amber='#916013', blue='#2868ae', selected='#dbeee7'),
+                  red='#b42c45', amber='#916013', blue='#2868ae', selected='#dbeee7', scroll='#a8afbe'),
 }
 
 
@@ -69,18 +70,58 @@ def label(parent, text, palette, size=10, bold=False, muted=False, **kwargs):
                     font=('Segoe UI', size, 'bold' if bold else 'normal'), anchor='w', **kwargs)
 
 
-def round_shape(canvas,x1,y1,x2,y2,radius,**kwargs):
-    r=min(radius,(x2-x1)/2,(y2-y1)/2)
-    return canvas.create_polygon(x1+r,y1,x2-r,y1,x2,y1,x2,y1+r,x2,y2-r,x2,y2,x2-r,y2,
-        x1+r,y2,x1,y2,x1,y2-r,x1,y1+r,x1,y1,smooth=True,splinesteps=24,**kwargs)
+@lru_cache(maxsize=48)
+def corner_coverage(radius):
+    """Supersample the small curved region and reuse it at every button size."""
+    samples = tuple((i + 0.5) / 8 for i in range(8))
+    return tuple(tuple(round(255 * sum((x+dx-radius)**2 + (y+dy-radius)**2 <= radius**2
+        for dx in samples for dy in samples) / 64) for x in range(radius)) for y in range(radius))
+
+
+@lru_cache(maxsize=192)
+def rounded_png(width, height, radius, color):
+    radius = max(1, min(radius, width//2, height//2))
+    rgb = bytes.fromhex(color.removeprefix('#'))
+    mask = corner_coverage(radius)
+    opaque = (rgb + b'\xff') * width
+    rows = []
+    for y in range(height):
+        edge_y = min(y, height - 1 - y)
+        if edge_y >= radius:
+            rows.append(b'\0' + opaque)
+            continue
+        edge = tuple(rgb + bytes((alpha,)) for alpha in mask[edge_y])
+        rows.append(b'\0' + b''.join(edge) + opaque[4*radius:4*(width-radius)] + b''.join(reversed(edge)))
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    header = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(b''.join(rows), 2)) + chunk(b'IEND', b'')
+
+
+def round_shape(canvas, x1, y1, x2, y2, radius, *, fill, outline=''):
+    images = getattr(canvas, 'shape_images', {})
+    canvas.shape_images = {item: photo for item, photo in images.items() if canvas.type(item)}
+    bounds = tuple(map(round, (x1, y1, x2, y2)))
+    left, top, right, bottom = bounds
+    width, height = right - left, bottom - top
+    if min(width, height) < 2:
+        return None
+    if outline and min(width, height) > 3:
+        round_shape(canvas, left, top, right, bottom, radius, fill=outline)
+        return round_shape(canvas, left+1, top+1, right-1, bottom-1, max(1, radius-1), fill=fill)
+    photo = tk.PhotoImage(master=canvas, data=rounded_png(width, height, radius, fill), format='png')
+    item = canvas.create_image(left, top, anchor='nw', image=photo)
+    canvas.shape_images[item] = photo
+    return item
 
 
 class RoundedButton(tk.Canvas):
-    def __init__(self,parent,text,command,palette,primary=False,width=None,anchor='center',active=False):
+    def __init__(self,parent,text,command,palette,primary=False,width=None,anchor='center',active=False,radius=11):
         self.palette=palette;self.primary=primary;self.command=command;self.text=text;self.state='normal'
         self.padx=18;self.pady=10;self.hovered=False;self.focused=False;self.anchor=anchor;self.active=active
         self.font=tkfont.Font(family='Segoe UI',size=10,weight='bold')
         self.minimum_width=(width or 0)*8
+        self.radius = radius
         super().__init__(parent,bg=parent.cget('bg'),highlightthickness=0,bd=0,takefocus=1,cursor='hand2')
         self.bind('<Configure>',lambda _:self.draw())
         self.bind('<Enter>',lambda _:self.hover(True));self.bind('<Leave>',lambda _:self.hover(False))
@@ -138,48 +179,133 @@ class RoundedButton(tk.Canvas):
         w=self.winfo_width()
         if w < 2:
             w=int(super().cget('width'))
-        h=int(super().cget('height'))
+        h=self.winfo_height()
+        if h < 2:
+            h=int(super().cget('height'))
         paint=(w,h,fill,foreground,self.focused,self.text)
         if paint == self.last_paint:
             return
         self.last_paint=paint
         self.delete('all')
-        round_shape(self,1,1,w-1,h-1,10,fill=fill,outline=p['accent'] if self.focused and not disabled else '')
-        self.create_text(self.padx if self.anchor=='w' else w/2,h/2,text=self.text,font=self.font,fill=foreground,anchor=self.anchor)
+        round_shape(self, 1, 1, w-1, h-1, self.radius, fill=fill,
+                    outline=p['accent'] if self.focused and not disabled else '')
+        self.create_text(self.padx if self.anchor=='w' else w/2, (h-1)/2, text=self.text,
+                         font=self.font, fill=foreground, anchor=self.anchor)
 
 
-def button(parent,text,command,palette,primary=False,width=None):
-    return RoundedButton(parent,text,command,palette,primary,width)
+def button(parent,text,command,palette,primary=False,width=None,radius=11):
+    return RoundedButton(parent,text,command,palette,primary,width,radius=radius)
 
 
-def card(parent, palette, **kwargs):
+def card(parent, palette, radius=14, **kwargs):
     frame=tk.Frame(parent,bg=palette['card'],bd=0,**kwargs)
-    previous=[None]
-    def clip(event):
-        if os.name!='nt' or (event.width,event.height)==previous[0] or event.width<30 or event.height<30:return
-        previous[0]=(event.width,event.height)
-        from ctypes import wintypes
-        gdi=ctypes.windll.gdi32;user=ctypes.windll.user32
-        gdi.CreateRoundRectRgn.restype=wintypes.HANDLE
-        gdi.CreateRoundRectRgn.argtypes=[ctypes.c_int]*6
-        user.SetWindowRgn.argtypes=[wintypes.HWND,wintypes.HANDLE,wintypes.BOOL]
-        region=gdi.CreateRoundRectRgn(0,0,event.width+1,event.height+1,28,28)
-        if not user.SetWindowRgn(frame.winfo_id(),region,True):gdi.DeleteObject(region)
-    frame.bind('<Configure>',clip)
+    background = parent.cget('bg')
+    corners = []
+    previous_radius = None
+
+    def paint_corners(event):
+        nonlocal previous_radius
+        size = min(radius, event.width//2, event.height//2)
+        if size < 2 or size == previous_radius:
+            return
+        previous_radius = size
+        for widget in corners:
+            widget.destroy()
+        corners.clear()
+        shape = tk.PhotoImage(master=frame, data=rounded_png(size*2, size*2, size, palette['card']), format='png')
+        for x, y, anchor in ((0,0,'nw'), (1,0,'ne'), (0,1,'sw'), (1,1,'se')):
+            photo = tk.PhotoImage(master=frame, width=size, height=size)
+            photo.tk.call(photo, 'copy', shape, '-from', x*size, y*size, (x+1)*size, (y+1)*size)
+            widget = tk.Label(frame, bg=background, image=photo, bd=0, padx=0, pady=0, highlightthickness=0)
+            widget.image = photo
+            widget.place(relx=x, rely=y, anchor=anchor, bordermode='outside')
+            widget.lower()
+            corners.append(widget)
+
+    frame.bind('<Configure>', paint_corners)
     return frame
 
 
 def text_area(parent, palette, height=5, expand=False):
     frame = tk.Frame(parent, bg=palette['card'])
-    frame.pack(side='bottom', fill='both' if expand else 'x', expand=expand)
+    frame.pack(side='bottom', fill='both' if expand else 'x', expand=expand, padx=8, pady=(0, 8))
     text = tk.Text(frame, height=height, bg=palette['card'], fg=palette['text'], font=('Segoe UI', 10),
                    insertbackground=palette['text'], relief='flat', wrap='word', padx=14, pady=10,
                    selectbackground=palette['selected'], bd=0)
-    scrollbar = ttk.Scrollbar(frame, command=text.yview)
-    text.configure(yscrollcommand=scrollbar.set)
-    scrollbar.pack(side='right', fill='y')
     text.pack(side='left', fill='both', expand=True)
     return text
+
+
+class ScrollThumb(tk.Canvas):
+    """Single uninterrupted drag handle, shown only when the table overflows."""
+
+    def __init__(self, parent, tree, palette):
+        super().__init__(parent, width=14, bg=palette['card'], bd=0, highlightthickness=0)
+        self.tree = tree
+        self.palette = palette
+        self.visible_range = (0.0, 1.0)
+        self.drag_offset = None
+        self.hovered = False
+        self.thumb = None
+        self.bind('<Configure>', self.draw)
+        self.bind('<Enter>', lambda _: self.set_hover(True))
+        self.bind('<Leave>', lambda _: self.set_hover(False))
+        self.bind('<Button-1>', self.press)
+        self.bind('<B1-Motion>', self.drag)
+        self.bind('<ButtonRelease-1>', self.release)
+        self.bind('<MouseWheel>', lambda event: tree.yview_scroll(-int(event.delta / 120), 'units'))
+
+    def set(self, first, last):
+        new_range = (float(first), float(last))
+        if new_range != self.visible_range:
+            self.visible_range = new_range
+            self.draw()
+
+    def bounds(self):
+        first, last = self.visible_range
+        track = max(0, self.winfo_height() - 12)
+        if last - first >= 1 or track < 12:
+            return None
+        length = min(track, max(22, track * (last - first)))
+        travel = track - length
+        proportion = first / (1 - (last - first))
+        return 6 + proportion * travel, length, travel
+
+    def draw(self, _=None):
+        if self.thumb is not None:
+            self.delete(self.thumb)
+            self.thumb = None
+        bounds = self.bounds()
+        if bounds:
+            top, length, _ = bounds
+            color = self.palette['muted'] if self.hovered or self.drag_offset is not None else self.palette['scroll']
+            self.thumb = round_shape(self, 4, top, 10, top + length, 3, fill=color, outline='')
+
+    def set_hover(self, hovered):
+        self.hovered = hovered
+        self.draw()
+
+    def press(self, event):
+        bounds = self.bounds()
+        if not bounds:
+            return
+        top, length, _ = bounds
+        if top <= event.y <= top + length:
+            self.drag_offset = event.y - top
+            self.draw()
+        else:
+            self.tree.yview_scroll(-1 if event.y < top else 1, 'pages')
+
+    def drag(self, event):
+        bounds = self.bounds()
+        if bounds and bounds[2] and self.drag_offset is not None:
+            first, last = self.visible_range
+            progress = min(1, max(0, (event.y - self.drag_offset - 6) / bounds[2]))
+            self.tree.yview_moveto(progress * (1 - (last - first)))
+
+    def release(self, _):
+        self.drag_offset = None
+        self.draw()
 
 
 def put_text(widget, text):
@@ -231,6 +357,7 @@ class DesktopApp:
         self.root.configure(bg=self.p['bg'])
         style = ttk.Style(self.root)
         style.theme_use('clam')
+        style.layout('Treeview', [('Treeview.treearea', {'sticky': 'nswe'})])
         style.configure('Treeview', background=self.p['card'], foreground=self.p['text'], fieldbackground=self.p['card'],
                         rowheight=32, font=('Segoe UI', 10), borderwidth=0, bordercolor=self.p['line'],
                         lightcolor=self.p['line'], darkcolor=self.p['line'], relief='flat')
@@ -290,7 +417,7 @@ class DesktopApp:
             self.nav_buttons.append(nav)
         bottom = tk.Frame(side, bg=p['side'])
         bottom.pack(side='bottom', fill='x', padx=24, pady=25)
-        label(bottom, 'v0.2.2', p, 9, bold=True, muted=True).pack(anchor='w')
+        label(bottom, 'v0.2.3', p, 9, bold=True, muted=True).pack(anchor='w')
         self.main = tk.Frame(self.shell_frame, bg=p['bg'])
         self.main.pack(side='left', fill='both', expand=True, padx=28, pady=18)
         top = tk.Frame(self.main, bg=p['bg'])
@@ -298,11 +425,11 @@ class DesktopApp:
         label(top,self.root.title(),p,20,True).pack(side='left')
         self.theme_button = button(top, self.t('light' if self.theme == 'dark' else 'dark'), self.toggle_theme, p)
         self.theme_button.pack(side='right', padx=(10, 0))
-        self.language_switch = card(top, dict(p, card=p['field']), padx=3, pady=3)
+        self.language_switch = card(top, dict(p, card=p['field']), radius=24, padx=9, pady=4)
         self.language_switch.pack(side='right')
         self.language_buttons = {}
         for language in ('ru', 'en'):
-            control = button(self.language_switch, language.upper(), lambda lang=language: self.set_language(lang), p, width=5)
+            control = button(self.language_switch, language.upper(), lambda lang=language: self.set_language(lang), p, width=5, radius=24)
             control.configure(padx=7, pady=7)
             control.pack(side='left', padx=1)
             self.language_buttons[language] = control
@@ -324,12 +451,13 @@ class DesktopApp:
 
     def table(self, parent, columns, heights=5):
         frame = tk.Frame(parent, bg=self.p['card'])
-        frame.pack(fill='both', expand=True)
+        frame.pack(fill='both', expand=True, padx=(12, 8))
         tree = ttk.Treeview(frame, columns=[c[0] for c in columns], show='headings', height=heights, selectmode='browse')
         for key, heading, width in columns:
             tree.heading(key, text=heading, anchor='w')
             tree.column(key, width=width, minwidth=60, anchor='w', stretch=key == columns[-1][0])
-        scroll = ttk.Scrollbar(frame, command=tree.yview)
+        scroll = ScrollThumb(frame, tree, self.p)
+        tree.scroll_thumb = scroll
         tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
         tree.pack(side='left', fill='both', expand=True)

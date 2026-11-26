@@ -140,14 +140,27 @@ class AuditApp(DesktopApp):
         panel = card(p, self.p); panel.pack(fill='both', expand=True)
         toolbar = tk.Frame(panel, bg=self.p['card']); toolbar.pack(fill='x', padx=16, pady=13)
         label(toolbar, self.t('list_title'), self.p, 11, True).pack(side='left')
-        self.filter_box = ttk.Combobox(toolbar, values=[self.t(k) for k in ('all','high','warning','info')], state='readonly', width=20)
-        self.filter_box.set(self.t(self.filter_key)); self.filter_box.pack(side='right')
-        self.filter_box.bind('<<ComboboxSelected>>', self.change_filter)
+        self.filter_button = button(toolbar, self.filter_caption(), self.show_filters, self.p, width=19)
+        self.filter_button.pack(side='right')
+        self.filter_menu = tk.Menu(self.filter_button, tearoff=False, bg=self.p['card'], fg=self.p['text'],
+                       activebackground=self.p['selected'], activeforeground=self.p['text'], font=('Segoe UI', 10))
+        for key in ('all', 'high', 'warning', 'info'):
+            self.filter_menu.add_command(label=self.t(key), command=lambda level=key: self.change_filter(level))
         self.search = tk.StringVar(value=self.search_value)
-        search = tk.Entry(toolbar, textvariable=self.search, bg=self.p['field'], fg=self.p['text'],
-                          insertbackground=self.p['text'], relief='flat', font=('Segoe UI', 10), width=14)
-        search.pack(side='right', padx=10, ipady=6)
-        label(toolbar,self.t('search'),self.p,9,muted=True).pack(side='right')
+        search_box = card(toolbar, dict(self.p, card=self.p['field']), radius=11, padx=11)
+        search_box.pack(side='right', padx=10)
+        icon = tk.Canvas(search_box, width=16, height=16, background=self.p['field'], highlightthickness=0)
+        icon.create_oval(2, 2, 11, 11, outline=self.p['muted'], width=2)
+        icon.create_line(10, 10, 15, 15, fill=self.p['muted'], width=2)
+        icon.pack(side='left', padx=(0, 8))
+        self.search_entry = tk.Entry(search_box, textvariable=self.search, bg=self.p['field'], fg=self.p['text'],
+                          insertbackground=self.p['text'], relief='flat', bd=0, highlightthickness=0,
+                          font=('Segoe UI', 10), width=13)
+        self.search_entry.pack(side='left')
+        search_box.configure(width=self.search_entry.winfo_reqwidth()+46, height=self.filter_button.winfo_reqheight()-2)
+        search_box.pack_propagate(False)
+        icon.bind('<Button-1>', lambda _: self.search_entry.focus_set())
+        self.root.bind('<Control-f>', self.focus_search)
         self.search.trace_add('write', self.schedule_search)
         self.details = text_area(panel, self.p, height=3)
         self.tree = self.table(panel, [('priority', self.t('priority'), 155), ('finding', self.t('finding'), 460)], heights=3)
@@ -210,8 +223,26 @@ class AuditApp(DesktopApp):
             self.mode = mode
             self.update_inspection()
 
-    def change_filter(self, _=None):
-        self.filter_key = ('all','high','warning','info')[self.filter_box.current()]
+    def focus_search(self, _):
+        if self.nav == 0:
+            self.search_entry.focus_set()
+            self.search_entry.selection_range(0, 'end')
+
+    def filter_caption(self):
+        return self.t(self.filter_key) + '   ▾'
+
+    def show_filters(self):
+        for index, key in enumerate(('all', 'high', 'warning', 'info')):
+            caption = ('✓  ' if self.filter_key == key else '     ') + self.t(key)
+            self.filter_menu.entryconfigure(index, label=caption)
+        try:
+            self.filter_menu.tk_popup(self.filter_button.winfo_rootx(), self.filter_button.winfo_rooty() + self.filter_button.winfo_height() + 4)
+        finally:
+            self.filter_menu.grab_release()
+
+    def change_filter(self, level):
+        self.filter_key = level
+        self.filter_button.configure(text=self.filter_caption())
         self.refresh_table()
 
     def refresh_table(self):
@@ -369,7 +400,29 @@ def self_test(artifacts):
                 capture_window(root, artifacts / f'audit-{language}-{theme}.png')
                 checked.append(f'{language}/{theme}')
         app.select_nav(1); root.update(); app.select_nav(0)
-        app.filter_key='info'; app.refresh_table(); assert not app.tree.get_children()
+        app.filter_menu.invoke(3)
+        assert not app.tree.get_children()
+        app.filter_menu.invoke(0); assert app.tree.get_children()
+        assert not app.details.cget('yscrollcommand')
+        for index in range(20):
+            app.tree.insert('', 'end', values=('Test', str(index)))
+        root.update()
+        thumb = app.tree.scroll_thumb
+        top, length, travel = thumb.bounds()
+        from types import SimpleNamespace
+        thumb.press(SimpleNamespace(y=top+length/2))
+        thumb.drag(SimpleNamespace(y=top+length/2+travel))
+        thumb.release(None)
+        root.update()
+        assert app.tree.yview()[1] == 1.0
+        assert len(thumb.find_all()) == 1
+        app.refresh_table()
+        app.search.set('there is no matching finding'); root.update()
+        deadline = time.monotonic() + 2
+        while app.search_job and time.monotonic() < deadline:
+            root.update(); time.sleep(.02)
+        assert not app.tree.get_children()
+        app.search.set('')
         root.geometry('1000x740'); root.update()
         for widget in (app.start_button,app.details,app.language_switch,app.theme_button):
             assert widget.winfo_ismapped()

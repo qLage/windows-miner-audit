@@ -13,6 +13,9 @@ import subprocess
 import sys
 
 VERSION = '0.1.0'
+STATUS_RU = {'incomplete': 'Проверка неполная', 'attention': 'Требуется проверка находок',
+             'no_rule_matches': 'Нет активных совпадений правил'}
+SEVERITY_RU = {'high': 'Высокий приоритет', 'warning': 'Предупреждение', 'info': 'Сведения'}
 SEVERITIES = {'high': 0, 'warning': 1, 'info': 2}
 EXPECTED_SECTIONS = {'processes', 'tasks', 'startup', 'defender', 'hosts', 'acl_blocks', 'remote', 'health'}
 SUSPICIOUS_PATH = re.compile(r'\\(?:WindowsTask|ReaItekHD|Windows Tasks Service)\\', re.I)
@@ -178,12 +181,14 @@ def render_html(report: dict, lang: str) -> str:
     esc = html.escape
     cards = []
     for item in report['findings']:
-        cards.append('<article class="' + item['severity'] + '"><span class="badge">' + esc(item['severity'])
+        severity = SEVERITY_RU[item['severity']] if ru else item['severity']
+        cards.append('<article class="' + item['severity'] + '"><span class="badge">' + esc(severity)
                      + (' · неактивно' if ru and not item['active'] else ' · inactive' if not item['active'] else '')
                      + '</span><h2>' + esc(item['title'][lang]) + '</h2><pre>'
                      + esc('\n'.join(item['evidence'])) + '</pre><p>' + esc(item['advice'][lang])
                      + '</p><small>' + esc(item['rule']) + '</small></article>')
-    errors = ''.join('<li>' + esc(error) + '</li>' for error in report['errors'])
+    errors = ''.join('<li>' + esc(localize_error(error, lang)) + '</li>' for error in report['errors'])
+    status = STATUS_RU[report['status']] if ru else report['status']
     heading = 'Проверка Windows' if ru else 'Windows audit'
     intro = ('Локальный отчёт • Только чтение • Без отправки данных' if ru else 'Local report • Read-only inspection • No data uploads')
     limitation = ('Эвристическая проверка, не замена антивирусу. Отсутствие совпадений не доказывает, что компьютер чист.' if ru else
@@ -198,7 +203,7 @@ h2{{font-size:21px;margin:12px 0}}.sub,small{{color:#aebbd0}}.summary{{display:f
 article.high{{border-color:#ff7b87}}article.warning{{border-color:#f9c66e}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#101827;padding:14px;border-radius:8px;font-size:13px}}
 .badge{{font-size:12px;text-transform:uppercase;letter-spacing:1px}}aside{{background:#282338;border-radius:12px;padding:20px}}footer{{margin:32px 0;color:#aebbd0}}</style>
 <main><header><div class="sub">WINDOWS MINER AUDIT / {VERSION}</div><h1>{heading}</h1><p>{intro}</p></header>
-<div class="summary"><div>Status: <strong>{esc(report['status'])}</strong></div><div>{'Находки' if ru else 'Findings'}: <strong>{len(report['findings'])}</strong></div>
+<div class="summary"><div>{'Состояние' if ru else 'Status'}: <strong>{esc(status)}</strong></div><div>{'Находки' if ru else 'Findings'}: <strong>{len(report['findings'])}</strong></div>
 <div>{'Ошибки сбора' if ru else 'Collection errors'}: <strong>{len(report['errors'])}</strong></div></div>
 <aside>{limitation}</aside>{''.join(cards)}<h2>{'Ограничения сбора' if ru else 'Collection limitations'}</h2><ul>{errors or '<li>—</li>'}</ul>
 <footer>{esc(report['generated_utc'])} · UTC · {'Отчёт может содержать личные пути. Проверьте перед публикацией.' if ru else 'Reports may contain private paths. Review before sharing.'}</footer></main></html>'''
@@ -235,13 +240,49 @@ def decode_collector(data: bytes) -> dict:
     raise RuntimeError('Collector returned no usable snapshot; inspection did not complete.')
 
 
+def localize_error(error: str, lang: str) -> str:
+    if lang != 'ru':
+        return error
+    known = {
+        'Some process paths/command lines are inaccessible. An elevated terminal may improve coverage.':
+            'Пути или командные строки части процессов недоступны. Запуск терминала от имени администратора может расширить проверку.',
+        'Collection timed out; remaining sections were not checked.':
+            'Время сбора истекло; оставшиеся разделы не проверены.',
+        'Live collection requires Windows. Use --snapshot for offline analysis.':
+            'Сбор сведений с ПК требует Windows. Для анализа готового JSON используйте --snapshot.',
+    }
+    if error in known:
+        return known[error]
+    if error.startswith('Missing collection section: '):
+        return 'Не собран раздел: ' + error.split(': ', 1)[1]
+    return error  # Preserve native OS diagnostics verbatim; never guess their meaning.
+
+
+def make_parser(lang: str) -> argparse.ArgumentParser:
+    ru = lang == 'ru'
+    class LocalizedParser(argparse.ArgumentParser):
+        def format_help(self):
+            result = super().format_help()
+            if ru:
+                result = result.replace('usage:', 'Использование:', 1)
+                result = result.replace('options:', 'Параметры:', 1).replace('optional arguments:', 'Параметры:', 1)
+            return result
+    parser = LocalizedParser(description='Проверка Windows только на чтение. Без сторонних Python-библиотек.' if ru else __doc__, add_help=False)
+    parser.add_argument('-h', '--help', action='help', help='Показать справку и выйти' if ru else 'Show help and exit')
+    parser.add_argument('--snapshot', type=Path, help='Проверить JSON схемы v1 вместо текущего ПК' if ru else 'Analyze schema v1 JSON instead of this PC')
+    parser.add_argument('--output', type=Path, default=Path('reports'), help='Папка отчётов (по умолчанию reports)' if ru else 'Report directory (default: reports)')
+    parser.add_argument('--lang', choices=['ru', 'en'], default=lang, help='Язык консоли и HTML-отчёта' if ru else 'Console and HTML report language')
+    parser.add_argument('--timeout', type=int, default=90, help='Ограничение времени сбора, секунды (90)' if ru else 'Collection timeout in seconds (90)')
+    parser.add_argument('--version', action='version', version=VERSION, help='Показать версию' if ru else 'Show version')
+    return parser
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--snapshot', type=Path, help='Analyze an existing schema v1 JSON instead of this PC')
-    parser.add_argument('--output', type=Path, default=Path('reports'))
-    parser.add_argument('--lang', choices=['ru', 'en'], default='en')
-    parser.add_argument('--timeout', type=int, default=90)
-    parser.add_argument('--version', action='version', version=VERSION)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    language_parser = argparse.ArgumentParser(add_help=False)
+    language_parser.add_argument('--lang', choices=['ru', 'en'], default='en')
+    language = language_parser.parse_known_args(argv)[0].lang
+    parser = make_parser(language)
     args = parser.parse_args(argv)
     try:
         snapshot = json.loads(args.snapshot.read_text(encoding='utf-8-sig')) if args.snapshot else collect(args.timeout)
@@ -251,13 +292,21 @@ def main(argv=None) -> int:
         base = args.output / f'audit-{stamp}'
         base.with_suffix('.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         base.with_suffix('.html').write_text(render_html(report, args.lang), encoding='utf-8')
-        print(f'{report["status"]}: {len(report["findings"])} findings, {len(report["errors"])} collection errors')
+        if args.lang == 'ru':
+            print(f'{STATUS_RU[report["status"]]}: находок — {len(report["findings"])}, ошибок сбора — {len(report["errors"])}')
+        else:
+            print(f'{report["status"]}: {len(report["findings"])} findings, {len(report["errors"])} collection errors')
         print(base.with_suffix('.html').resolve())
         return 2 if report['errors'] else 1 if report['status'] == 'attention' else 0
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
-        print('Audit failed / Проверка не завершена: ' + redact(error), file=sys.stderr)
+        prefix = 'Проверка не завершена: ' if args.lang == 'ru' else 'Audit failed: '
+        print(prefix + localize_error(redact(error), args.lang), file=sys.stderr)
         return 2
 
 
 if __name__ == '__main__':
+    # Keep redirected Russian output readable as UTF-8 on Windows as well as Unix.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     raise SystemExit(main())

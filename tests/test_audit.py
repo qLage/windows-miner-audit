@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import contextlib
+import io
+import re
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('audit', ROOT / 'audit.py')
@@ -17,6 +22,57 @@ def baseline():
 
 
 class AuditTests(unittest.TestCase):
+    def test_documented_cli_commands_in_both_languages(self):
+        for language, expected in [('ru', 'Требуется проверка находок'), ('en', 'attention')]:
+            help_result = subprocess.run([sys.executable, str(ROOT / 'audit.py'), '--lang', language, '--help'],
+                                         capture_output=True, encoding='utf-8', check=True)
+            self.assertIn('Использование:' if language == 'ru' else 'usage:', help_result.stdout)
+            with tempfile.TemporaryDirectory() as temp:
+                result = subprocess.run([sys.executable, str(ROOT / 'audit.py'), '--lang', language,
+                                         '--snapshot', str(ROOT / 'examples/suspicious.json'), '--output', temp],
+                                        capture_output=True, encoding='utf-8')
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(expected, result.stdout)
+                self.assertEqual(len(list(Path(temp).glob('*.html'))), 1)
+
+    def test_russian_and_english_help(self):
+        ru = audit.make_parser('ru').format_help()
+        en = audit.make_parser('en').format_help()
+        self.assertIn('Использование:', ru)
+        self.assertIn('Папка отчётов', ru)
+        self.assertIn('Report directory', en)
+        self.assertNotIn('Папка отчётов', en)
+
+    def test_localized_report_and_console(self):
+        sample = baseline()
+        sample['health'] = [{'drive': 'C:', 'free_gb': 0.2}]
+        for language, expected, forbidden in [('ru', 'Требуется проверка находок', 'Status:'),
+                                                ('en', 'attention', 'Состояние:')]:
+            with tempfile.TemporaryDirectory() as temp:
+                source = Path(temp) / 'snapshot.json'
+                source.write_text(json.dumps(sample), encoding='utf-8')
+                output = Path(temp) / 'reports'
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    code = audit.main(['--snapshot', str(source), '--output', str(output), '--lang', language])
+                self.assertEqual(code, 1)
+                self.assertIn(expected, stdout.getvalue())
+                page = next(output.glob('*.html')).read_text(encoding='utf-8')
+                self.assertIn(expected, page)
+                self.assertNotIn(forbidden, page)
+                self.assertNotIn('\ufffd', page)
+
+    def test_documentation_links_and_utf8(self):
+        for filename in ('README.md', 'README.ru.md', 'README.en.md', 'VERIFICATION.md'):
+            page = (ROOT / filename).read_text(encoding='utf-8')
+            self.assertNotIn('\ufffd', page)
+            for target in re.findall(r'\]\(([^)]+)\)', page):
+                if '://' not in target and not target.startswith('#'):
+                    self.assertTrue((ROOT / target.split('#')[0]).is_file(), f'{filename}: {target}')
+        home = (ROOT / 'README.md').read_text(encoding='utf-8')
+        self.assertIn('## Русский', home)
+        self.assertIn('## English', home)
+
     def rules(self, snapshot):
         return [f['rule'] for f in audit.analyze(snapshot)['findings']]
 

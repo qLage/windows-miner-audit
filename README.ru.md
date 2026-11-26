@@ -1,19 +1,28 @@
 # Windows Miner Audit
 
-[English](README.en.md) · [Главная](README.md) · Windows 10/11 x64
+[English](README.en.md) · [Главная](README.md) · Windows 10/11 x64 · [Проект в портфолио](https://qlage.github.io/case-miner-audit.html)
 
 ## Скачать и запустить
 
 **[Скачать WindowsMinerAudit.exe](https://github.com/qLage/windows-miner-audit/releases/latest/download/WindowsMinerAudit.exe)**
 
+[Страница релиза](https://github.com/qLage/windows-miner-audit/releases/latest) · [SHA256SUMS.txt](https://github.com/qLage/windows-miner-audit/releases/latest/download/SHA256SUMS.txt)
+
 Это portable-программа: запустите один `.exe`. Python, установка, права администратора, ярлыки и регистрация в Windows для обычного запуска не нужны. Рядом создаётся папка `WindowsMinerAudit-data` с настройками и отчётами. Храните программу в доступной для записи папке; для переноса настроек перемещайте её вместе с этой папкой. Временная распаковка встроенного Python/Tk выполняется в TEMP и очищается при штатном выходе.
 
 ![Windows Miner Audit — русский, тёмная тема](docs/screenshots/dark-ru.png)
 
+## Первая проверка
+
+1. В разделе «Проверка» выберите «Быстрая» и нажмите «Начать проверку».
+2. Выберите строку в списке находок, чтобы увидеть признаки и рекомендацию. Если часть данных недоступна, причина указана в «Ограничениях проверки».
+3. Нажмите «Открыть HTML-отчёт» для чтения в браузере. Предыдущие завершённые проверки доступны в разделе «Отчёты».
+
+«Расширенная» добавляет проверку служб, WMI и сетевой активности.
+
 ## Интерфейс
 
 В интерфейсе два раздела: «Проверка» и «Отчёты». При запуске восстанавливается последний отчёт. Кнопка HTML открывает его в веб-браузере, выбранном для HTTPS, даже если файлы `.html` назначены на редактор. В истории есть отдельные кнопки просмотра и открытия в браузере.
-
 
 - Русский и английский языки, тёмная и светлая темы. Выбор сохраняется локально.
 - Быстрая проверка: 8 разделов. Расширенная: 14 разделов.
@@ -45,6 +54,8 @@
 Исходники требуют Python 3.10+ с Tkinter. Дополнительных библиотек для работы нет.
 
 ```powershell
+git clone https://github.com/qLage/windows-miner-audit.git
+cd windows-miner-audit
 python gui.py
 python audit.py --lang ru
 python audit.py --deep --lang ru
@@ -61,6 +72,7 @@ python gui.py --self-test --artifacts gui-artifacts
 python -m venv .build-env
 .\.build-env\Scripts\python.exe -m pip install -r build-requirements.txt
 .\.build-env\Scripts\python.exe build_windows.py --output dist --work build
+.\.build-env\Scripts\python.exe verify_windows_package.py --directory dist
 ```
 
 Получится `dist/WindowsMinerAudit.exe` и `SHA256SUMS.txt`. Исходники, GUI и EXE проверяются отдельно; сценарий сборки не создаёт установщик.

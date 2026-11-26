@@ -2,6 +2,8 @@
 
 ## Русский
 
+[Как запустить проверку и прочитать отчёт](../README.ru.md#первая-проверка) · [Проверка программы](../VERIFICATION.md#русский)
+
 Программа сопоставляет команды процессов, параметры майнинга, подписи ограниченного набора файлов, автозапуск и изменения защиты. Расширенная проверка добавляет службы, WMI, перехваты запуска, папки автозапуска и корреляцию сети/CPU.
 
 Направления проверки соответствуют областям, описанным в [Microsoft Sysinternals Autoruns](https://learn.microsoft.com/en-us/sysinternals/downloads/autoruns). Autoruns не включён в программу, его полный набор возможностей не повторяется, обращения к VirusTotal не выполняются.
@@ -17,6 +19,8 @@ PowerShell Base64-команды разбираются как UTF-16LE согл
 Скрытые в ядре угрозы нельзя исключить такой проверкой работающей Windows. [Microsoft Defender Offline](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-offline) использует отдельную доверенную среду. Его запуск и возможная перезагрузка остаются решением пользователя. Программа не перезагружает ПК, не удаляет файлы и не меняет настройки антивируса.
 
 ## English
+
+[Start an inspection and read the report](../README.en.md#first-inspection) · [Verification](../VERIFICATION.md#english)
 
 The engine correlates process commands, mining options, bounded signature checks, persistence and protection settings. Extended mode adds services, WMI, launch hooks, startup folders and network/CPU correlations.
 

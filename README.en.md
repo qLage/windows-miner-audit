@@ -1,19 +1,28 @@
 # Windows Miner Audit
 
-[Русский](README.ru.md) · [Home](README.md) · Windows 10/11 x64
+[Русский](README.ru.md) · [Home](README.md) · Windows 10/11 x64 · [Portfolio case study](https://qlage.github.io/case-miner-audit.html)
 
 ## Download and run
 
 **[Download WindowsMinerAudit.exe](https://github.com/qLage/windows-miner-audit/releases/latest/download/WindowsMinerAudit.exe)**
 
+[Release page](https://github.com/qLage/windows-miner-audit/releases/latest) · [SHA256SUMS.txt](https://github.com/qLage/windows-miner-audit/releases/latest/download/SHA256SUMS.txt)
+
 A portable application: run one `.exe`. No Python installation, administrator privileges, shortcuts or Windows registration are needed for ordinary use. Settings and reports live in `WindowsMinerAudit-data` beside the executable. Use a writable folder and move this data folder with the executable to retain settings. The bundled Python/Tk runtime temporarily extracts into TEMP and is removed on normal exit.
 
 ![Windows Miner Audit — English, light theme](docs/screenshots/light-en.png)
 
+## First inspection
+
+1. Open **Inspection**, select **Quick**, then select **Start inspection**.
+2. Select a finding to review the evidence and recommendation. **Inspection limitations** explains any collection gaps.
+3. Select **Open HTML report** to read the result in a browser. Previous completed inspections are available in **Reports**.
+
+**Extended** adds checks for services, WMI and network activity.
+
 ## Interface
 
 The interface has two sections: Inspection and Reports. The most recent saved report is restored on startup. HTML reports open in the registered HTTPS web browser even when `.html` files are associated with an editor. Report history has explicit view and browser-open actions.
-
 
 - Russian and English, dark and light themes; preferences saved locally.
 - Quick inspection covers 8 areas; extended inspection covers 14.
@@ -45,6 +54,8 @@ Conventional PowerShell `-EncodedCommand` payloads are bounded and decoded as UT
 Source execution requires Python 3.10+ with Tkinter; there are no additional runtime packages.
 
 ```powershell
+git clone https://github.com/qLage/windows-miner-audit.git
+cd windows-miner-audit
 python gui.py
 python audit.py --lang en
 python audit.py --deep --lang en
@@ -61,6 +72,7 @@ python gui.py --self-test --artifacts gui-artifacts
 python -m venv .build-env
 .\.build-env\Scripts\python.exe -m pip install -r build-requirements.txt
 .\.build-env\Scripts\python.exe build_windows.py --output dist --work build
+.\.build-env\Scripts\python.exe verify_windows_package.py --directory dist
 ```
 
 Outputs are `dist/WindowsMinerAudit.exe` and `SHA256SUMS.txt`. Source, GUI and packaged EXE are checked separately. The build does not create an installer.

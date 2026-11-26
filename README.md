@@ -4,20 +4,29 @@
 
 ## Русский
 
-[English](README.en.md) · [Главная](README.md) · Windows 10/11 x64
+[English](README.en.md) · [Главная](README.md) · Windows 10/11 x64 · [Проект в портфолио](https://qlage.github.io/case-miner-audit.html)
 
-## Скачать и запустить
+### Скачать и запустить
 
 **[Скачать WindowsMinerAudit.exe](https://github.com/qLage/windows-miner-audit/releases/latest/download/WindowsMinerAudit.exe)**
+
+[Страница релиза](https://github.com/qLage/windows-miner-audit/releases/latest) · [SHA256SUMS.txt](https://github.com/qLage/windows-miner-audit/releases/latest/download/SHA256SUMS.txt)
 
 Это portable-программа: запустите один `.exe`. Python, установка, права администратора, ярлыки и регистрация в Windows для обычного запуска не нужны. Рядом создаётся папка `WindowsMinerAudit-data` с настройками и отчётами. Храните программу в доступной для записи папке; для переноса настроек перемещайте её вместе с этой папкой. Временная распаковка встроенного Python/Tk выполняется в TEMP и очищается при штатном выходе.
 
 ![Windows Miner Audit — русский, тёмная тема](docs/screenshots/dark-ru.png)
 
-## Интерфейс
+### Первая проверка
+
+1. В разделе «Проверка» выберите «Быстрая» и нажмите «Начать проверку».
+2. Выберите строку в списке находок, чтобы увидеть признаки и рекомендацию. Если часть данных недоступна, причина указана в «Ограничениях проверки».
+3. Нажмите «Открыть HTML-отчёт» для чтения в браузере. Предыдущие завершённые проверки доступны в разделе «Отчёты».
+
+«Расширенная» добавляет проверку служб, WMI и сетевой активности.
+
+### Интерфейс
 
 В интерфейсе два раздела: «Проверка» и «Отчёты». При запуске восстанавливается последний отчёт. Кнопка HTML открывает его в веб-браузере, выбранном для HTTPS, даже если файлы `.html` назначены на редактор. В истории есть отдельные кнопки просмотра и открытия в браузере.
-
 
 - Русский и английский языки, тёмная и светлая темы. Выбор сохраняется локально.
 - Быстрая проверка: 8 разделов. Расширенная: 14 разделов.
@@ -27,7 +36,7 @@
 
 В покое сканирование не выполняется. Сбор идёт в отдельном процессе только после нажатия кнопки; при остановке завершается только созданный программой сборщик. Нет фоновой службы, автозапуска, веб-движка и автоматических загрузок файлов.
 
-## Проверяемые признаки
+### Проверяемые признаки
 
 | Быстрая проверка | Расширенная проверка дополнительно |
 |---|---|
@@ -44,11 +53,13 @@
 
 [Методы, ограничения и первичные источники](docs/DETECTION.md) · [Что проверено](VERIFICATION.md)
 
-## Запуск исходников и CLI
+### Запуск исходников и CLI
 
 Исходники требуют Python 3.10+ с Tkinter. Дополнительных библиотек для работы нет.
 
 ```powershell
+git clone https://github.com/qLage/windows-miner-audit.git
+cd windows-miner-audit
 python gui.py
 python audit.py --lang ru
 python audit.py --deep --lang ru
@@ -59,36 +70,44 @@ python gui.py --self-test --artifacts gui-artifacts
 
 `Start-GUI.cmd` открывает графический интерфейс; `Start-Audit.cmd` сохраняет консольный вариант. Коды CLI: `0` — нет активных совпадений правил, `1` — находки, `2` — неполная проверка или ошибка. Пример JSON вымышленный; для него код `1` ожидаем.
 
-## Сборка portable EXE
+### Сборка portable EXE
 
 ```powershell
 python -m venv .build-env
 .\.build-env\Scripts\python.exe -m pip install -r build-requirements.txt
 .\.build-env\Scripts\python.exe build_windows.py --output dist --work build
+.\.build-env\Scripts\python.exe verify_windows_package.py --directory dist
 ```
 
 Получится `dist/WindowsMinerAudit.exe` и `SHA256SUMS.txt`. Исходники, GUI и EXE проверяются отдельно; сценарий сборки не создаёт установщик.
 
 Отчёты могут содержать личные пути и названия задач. Типичные секреты скрываются, но полная анонимизация не гарантируется. Перед публикацией просмотрите отчёт. MIT · [SECURITY.md](SECURITY.md).
 
----
-
 ## English
 
-[Русский](README.ru.md) · [Home](README.md) · Windows 10/11 x64
+[Русский](README.ru.md) · [Home](README.md) · Windows 10/11 x64 · [Portfolio case study](https://qlage.github.io/case-miner-audit.html)
 
-## Download and run
+### Download and run
 
 **[Download WindowsMinerAudit.exe](https://github.com/qLage/windows-miner-audit/releases/latest/download/WindowsMinerAudit.exe)**
+
+[Release page](https://github.com/qLage/windows-miner-audit/releases/latest) · [SHA256SUMS.txt](https://github.com/qLage/windows-miner-audit/releases/latest/download/SHA256SUMS.txt)
 
 A portable application: run one `.exe`. No Python installation, administrator privileges, shortcuts or Windows registration are needed for ordinary use. Settings and reports live in `WindowsMinerAudit-data` beside the executable. Use a writable folder and move this data folder with the executable to retain settings. The bundled Python/Tk runtime temporarily extracts into TEMP and is removed on normal exit.
 
 ![Windows Miner Audit — English, light theme](docs/screenshots/light-en.png)
 
-## Interface
+### First inspection
+
+1. Open **Inspection**, select **Quick**, then select **Start inspection**.
+2. Select a finding to review the evidence and recommendation. **Inspection limitations** explains any collection gaps.
+3. Select **Open HTML report** to read the result in a browser. Previous completed inspections are available in **Reports**.
+
+**Extended** adds checks for services, WMI and network activity.
+
+### Interface
 
 The interface has two sections: Inspection and Reports. The most recent saved report is restored on startup. HTML reports open in the registered HTTPS web browser even when `.html` files are associated with an editor. Report history has explicit view and browser-open actions.
-
 
 - Russian and English, dark and light themes; preferences saved locally.
 - Quick inspection covers 8 areas; extended inspection covers 14.
@@ -98,7 +117,7 @@ The interface has two sections: Inspection and Reports. The most recent saved re
 
 No inspection runs at rest. Collection starts in an owned subprocess only after you request it; stopping it terminates only that collector. There is no background service, autostart, web engine or automatic file upload.
 
-## Detection scope
+### Detection scope
 
 | Quick inspection | Extended inspection adds |
 |---|---|
@@ -115,11 +134,13 @@ Conventional PowerShell `-EncodedCommand` payloads are bounded and decoded as UT
 
 [Methods, limits and primary sources](docs/DETECTION.md) · [Verification](VERIFICATION.md)
 
-## Source and CLI
+### Source and CLI
 
 Source execution requires Python 3.10+ with Tkinter; there are no additional runtime packages.
 
 ```powershell
+git clone https://github.com/qLage/windows-miner-audit.git
+cd windows-miner-audit
 python gui.py
 python audit.py --lang en
 python audit.py --deep --lang en
@@ -130,12 +151,13 @@ python gui.py --self-test --artifacts gui-artifacts
 
 `Start-GUI.cmd` opens the desktop interface; `Start-Audit.cmd` retains console usage. CLI exit codes: `0` no active rule matches, `1` findings, `2` incomplete inspection or failure. The synthetic fixture intentionally exits with code `1`.
 
-## Build the portable EXE
+### Build the portable EXE
 
 ```powershell
 python -m venv .build-env
 .\.build-env\Scripts\python.exe -m pip install -r build-requirements.txt
 .\.build-env\Scripts\python.exe build_windows.py --output dist --work build
+.\.build-env\Scripts\python.exe verify_windows_package.py --directory dist
 ```
 
 Outputs are `dist/WindowsMinerAudit.exe` and `SHA256SUMS.txt`. Source, GUI and packaged EXE are checked separately. The build does not create an installer.

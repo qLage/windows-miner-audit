@@ -2,6 +2,8 @@
 
 ## Русский
 
+[Релиз](https://github.com/qLage/windows-miner-audit/releases/latest) содержит portable EXE, SHA256SUMS.txt и результаты самопроверки в verification.json. Для сверки выполните `Get-FileHash .\WindowsMinerAudit.exe -Algorithm SHA256` в папке скачивания и сравните результат с SHA256SUMS.txt.
+
 При запуске и завершении проверки кнопки и таблица остаются на месте. Самопроверка проверяет это и выбор языка кнопками RU / EN.
 
 Версия 0.2.3 проверена из исходников и как portable EXE: русский/английский, тёмная/светлая тема, минимальный размер окна, настоящие переключатели языка/темы, запуск и отмена проверки, история и сохранение отчётов. Снимки интерфейса содержат помеченные вымышленные данные.
@@ -17,6 +19,8 @@ python gui.py --benchmark gui-artifacts/idle.json
 Самопроверка GUI использует имитацию сборщика. Живой сбор Windows проверен отдельно, включая расширенный режим; недоступные защищённые процессы отражаются как неполное покрытие. `--benchmark` измеряет только покой окна: время, CPU одного ядра и рабочую память процесса. Результаты зависят от компьютера и состояния Windows.
 
 ## English
+
+The [release](https://github.com/qLage/windows-miner-audit/releases/latest) includes the portable EXE, SHA256SUMS.txt and the self-test results in verification.json. Run `Get-FileHash .\WindowsMinerAudit.exe -Algorithm SHA256` in your download folder and compare the output with SHA256SUMS.txt.
 
 Starting and finishing an inspection keeps the existing buttons and table in place. The self-test checks this and the RU / EN language buttons.
 

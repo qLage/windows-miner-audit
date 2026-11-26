@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 
-VERSION = '0.2.1'
+VERSION = '0.2.2'
 STATUS_RU = {'incomplete': 'Проверка неполная', 'attention': 'Требуется проверка находок',
              'no_rule_matches': 'Нет активных совпадений правил'}
 SEVERITY_RU = {'high': 'Высокий приоритет', 'warning': 'Предупреждение', 'info': 'Сведения'}

@@ -84,8 +84,12 @@ class RoundedButton(tk.Canvas):
         super().__init__(parent,bg=parent.cget('bg'),highlightthickness=0,bd=0,takefocus=1,cursor='hand2')
         self.bind('<Configure>',lambda _:self.draw())
         self.bind('<Enter>',lambda _:self.hover(True));self.bind('<Leave>',lambda _:self.hover(False))
-        self.bind('<Button-1>',lambda _:self.invoke());self.bind('<space>',lambda _:self.invoke());self.bind('<Return>',lambda _:self.invoke())
-        self.bind('<FocusIn>',lambda _:self.focus(True));self.bind('<FocusOut>',lambda _:self.focus(False))
+        self.bind('<Button-1>', self.press)
+        self.bind('<ButtonRelease-1>', self.release)
+        self.bind('<KeyRelease-space>',lambda _:self.invoke());self.bind('<KeyRelease-Return>',lambda _:self.invoke())
+        self.bind('<FocusIn>',lambda _:self.show_focus(True));self.bind('<FocusOut>',lambda _:self.show_focus(False))
+        self.pressed = False
+        self.last_paint = None
         self.resize()
 
     def resize(self):
@@ -95,9 +99,12 @@ class RoundedButton(tk.Canvas):
     def configure(self,cnf=None,**kwargs):
         if isinstance(cnf,dict):kwargs.update(cnf)
         resized=False
-        for key in ('text','command','state','padx','pady'):
+        for key in ('text','command','state','padx','pady','active','primary'):
             if key in kwargs:
-                setattr(self,key,kwargs.pop(key));resized=True
+                value = kwargs.pop(key)
+                if key in ('text','padx','pady') and getattr(self,key) != value:
+                    resized = True
+                setattr(self,key,value)
         if kwargs:super().configure(**kwargs)
         if resized:self.resize()
         else:self.draw()
@@ -110,16 +117,33 @@ class RoundedButton(tk.Canvas):
     def invoke(self):
         if self.state!='disabled' and self.command:return self.command()
 
+    def press(self, _):
+        if self.state != 'disabled':
+            self.focus_set()
+            self.pressed = True
+
+    def release(self, event):
+        pressed, self.pressed = self.pressed, False
+        if pressed and 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height():
+            self.invoke()
+
     def hover(self,value):self.hovered=value;self.draw()
-    def focus(self,value):self.focused=value;self.draw()
+    def show_focus(self,value):self.focused=value;self.draw()
 
     def draw(self):
         if not self.winfo_exists():return
         p=self.palette;disabled=self.state=='disabled'
         fill=p['field'] if disabled else p['accent'] if self.primary else p['selected'] if self.active else p['hover'] if self.hovered else p['field']
         foreground=p['muted'] if disabled else p['ink'] if self.primary else p['accent'] if self.active else p['text']
+        w=self.winfo_width()
+        if w < 2:
+            w=int(super().cget('width'))
+        h=int(super().cget('height'))
+        paint=(w,h,fill,foreground,self.focused,self.text)
+        if paint == self.last_paint:
+            return
+        self.last_paint=paint
         self.delete('all')
-        w=max(self.winfo_width(),int(super().cget('width')));h=int(super().cget('height'))
         round_shape(self,1,1,w-1,h-1,10,fill=fill,outline=p['accent'] if self.focused and not disabled else '')
         self.create_text(self.padx if self.anchor=='w' else w/2,h/2,text=self.text,font=self.font,fill=foreground,anchor=self.anchor)
 
@@ -181,6 +205,9 @@ class DesktopApp:
         self.busy = False
         self.closed = False
         self.nav = 0
+        self.shell_frame = None
+        self.shell_theme = None
+        self.body = None
         root.title('Vortex Helper' if purple else 'Windows Miner Audit')
         icon_path=Path(__file__).with_name('assets')/'icon.png'
         if icon_path.is_file():
@@ -189,6 +216,7 @@ class DesktopApp:
         root.geometry('1190x820')
         root.minsize(1000, 740)
         root.protocol('WM_DELETE_WINDOW', self.close)
+        root.bind('<Map>', lambda event: windows_setup(root, self.theme == 'dark') if event.widget == root else None)
         root.after(150, self.pump)
 
     def t(self, key, **values):
@@ -222,14 +250,31 @@ class DesktopApp:
         self.root.option_add('*TCombobox*Listbox.foreground', self.p['text'])
         windows_setup(self.root, self.theme == 'dark')
         self.root.after_idle(lambda: windows_setup(self.root, self.theme == 'dark'))
-        self.root.after(80,lambda:windows_setup(self.root,self.theme=='dark'))
 
     def shell(self, brand, subtitle, navigation):
-        for child in self.root.winfo_children():
-            child.destroy()
+        if self.shell_frame is None or self.shell_theme != self.theme:
+            self.build_shell(brand, navigation)
+        self.theme_button.configure(text=self.t('light' if self.theme == 'dark' else 'dark'))
+        for language, control in self.language_buttons.items():
+            control.configure(primary=language == self.language)
+        for index, control in enumerate(self.nav_buttons):
+            control.configure(text=navigation[index], active=index == self.nav)
+        if self.body is not None:
+            self.body.destroy()
+        self.body = tk.Frame(self.main, bg=self.p['bg'])
+        self.body.pack(fill='both', expand=True)
+        return self.body
+
+    def build_shell(self, brand, navigation):
+        if self.shell_frame is not None:
+            self.shell_frame.destroy()
         self.apply_palette()
+        self.shell_theme = self.theme
+        self.body = None
         p = self.p
-        side = tk.Frame(self.root, bg=p['side'], width=206)
+        self.shell_frame = tk.Frame(self.root, bg=p['bg'])
+        self.shell_frame.pack(fill='both', expand=True)
+        side = tk.Frame(self.shell_frame, bg=p['side'], width=206)
         side.pack(side='left', fill='y')
         side.pack_propagate(False)
         mark = tk.Canvas(side, width=44, height=44, bg=p['side'], highlightthickness=0)
@@ -237,35 +282,45 @@ class DesktopApp:
         round_shape(mark,1,1,43,43,12,fill=p['accent'],outline='')
         mark.create_text(22,22,text='VH' if self.purple else 'MA',fill=p['ink'],font=('Segoe UI',12,'bold'))
         label(side, brand, p, 14, True).pack(anchor='w', padx=24,pady=(0,28))
+        self.nav_buttons = []
         for index, title in enumerate(navigation):
             active = index == self.nav
             nav=RoundedButton(side,title,lambda i=index:self.select_nav(i),p,anchor='w',active=active)
             nav.pack(fill='x', padx=12, pady=3)
+            self.nav_buttons.append(nav)
         bottom = tk.Frame(side, bg=p['side'])
         bottom.pack(side='bottom', fill='x', padx=24, pady=25)
-        label(bottom, 'v0.2.1', p, 9, bold=True, muted=True).pack(anchor='w')
-        self.main = tk.Frame(self.root, bg=p['bg'])
+        label(bottom, 'v0.2.2', p, 9, bold=True, muted=True).pack(anchor='w')
+        self.main = tk.Frame(self.shell_frame, bg=p['bg'])
         self.main.pack(side='left', fill='both', expand=True, padx=28, pady=18)
         top = tk.Frame(self.main, bg=p['bg'])
         top.pack(fill='x', pady=(0, 14))
         label(top,self.root.title(),p,20,True).pack(side='left')
         self.theme_button = button(top, self.t('light' if self.theme == 'dark' else 'dark'), self.toggle_theme, p)
         self.theme_button.pack(side='right', padx=(10, 0))
-        self.language_box = ttk.Combobox(top, values=['Русский', 'English'], state='readonly', width=11, font=('Segoe UI', 10))
-        self.language_box.set('Русский' if self.language == 'ru' else 'English')
-        self.language_box.pack(side='right')
-        self.language_box.bind('<<ComboboxSelected>>', lambda _: self.set_language('ru' if self.language_box.get() == 'Русский' else 'en'))
-        return self.main
+        self.language_switch = card(top, dict(p, card=p['field']), padx=3, pady=3)
+        self.language_switch.pack(side='right')
+        self.language_buttons = {}
+        for language in ('ru', 'en'):
+            control = button(self.language_switch, language.upper(), lambda lang=language: self.set_language(lang), p, width=5)
+            control.configure(padx=7, pady=7)
+            control.pack(side='left', padx=1)
+            self.language_buttons[language] = control
 
     def metrics(self, parent, items):
         row = tk.Frame(parent, bg=self.p['bg'])
         row.pack(fill='x', pady=(0, 20))
+        values = []
         for index, (heading, value, caption) in enumerate(items):
+            row.columnconfigure(index, weight=1, uniform='metric')
             box = card(row, self.p, padx=17, pady=9)
-            box.pack(side='left', fill='both', expand=True, padx=(0 if index == 0 else 10, 0))
+            box.grid(row=0,column=index,sticky='nsew',padx=(0 if index == 0 else 10, 0))
             label(box, heading, self.p, 9, muted=True).pack(anchor='w')
-            label(box, str(value), self.p, 21, True).pack(anchor='w', pady=(4, 0))
+            value_label = label(box, str(value), self.p, 21, True)
+            value_label.pack(anchor='w', pady=(4, 0))
+            values.append(value_label)
             label(box, caption, self.p, 9, muted=True).pack(anchor='w')
+        return values
 
     def table(self, parent, columns, heights=5):
         frame = tk.Frame(parent, bg=self.p['card'])
@@ -290,6 +345,8 @@ class DesktopApp:
     def set_language(self, language):
         if language not in ('ru', 'en'):
             raise ValueError('Unsupported language')
+        if language == self.language:
+            return
         self.language = language
         self.save_settings()
         self.render()
@@ -298,8 +355,11 @@ class DesktopApp:
         self.theme = 'light' if self.theme == 'dark' else 'dark'
         self.save_settings()
         self.render()
+        self.theme_button.focus_set()
 
     def select_nav(self, index):
+        if index == self.nav:
+            return
         self.nav = index
         self.render()
 

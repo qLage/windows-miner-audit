@@ -109,15 +109,17 @@ class AuditApp(DesktopApp):
         hero = card(p, self.p, padx=22, pady=14)
         hero.pack(fill='x', pady=(0, 20))
         row = tk.Frame(hero, bg=self.p['card']); row.pack(fill='x')
-        dot = label(row, '●  '+self.t(self.state_key), self.p, 13, True)
-        dot.configure(fg=self.p['accent'] if not self.busy else self.p['blue'])
-        dot.pack(side='left')
+        self.status_label = label(row, '', self.p, 13, True)
+        self.status_label.pack(side='left')
+        self.mode_buttons = {}
         for mode, title in [('deep', 'deep'), ('quick', 'quick')]:
             control = button(row, self.t(title), lambda m=mode: self.set_mode(m), self.p, primary=self.mode == mode)
             control.configure(state='disabled' if self.busy else 'normal', pady=6)
             control.pack(side='right', padx=(8, 0))
+            self.mode_buttons[mode] = control
         label(hero, self.t('intro'), self.p, 10, muted=True, wraplength=780).pack(anchor='w', pady=(8, 6))
-        label(hero, self.t('scope_'+self.mode), self.p, 9, muted=True).pack(anchor='w')
+        self.scope_label = label(hero, '', self.p, 9, muted=True)
+        self.scope_label.pack(anchor='w')
         controls = tk.Frame(hero, bg=self.p['card']); controls.pack(fill='x', pady=(12, 0))
         self.start_button = button(controls, self.t('stop' if self.busy else 'start'), self.cancel if self.busy else self.start, self.p, True)
         self.start_button.pack(side='left')
@@ -126,21 +128,15 @@ class AuditApp(DesktopApp):
         self.export_button.pack(side='left', padx=(10, 0))
         self.stage_label = label(controls, self.stage_text(), self.p, 9, muted=True, wraplength=300)
         self.stage_label.pack(side='right', padx=(12, 0))
-        self.progress = ttk.Progressbar(hero, mode='determinate', maximum=14 if self.mode == 'deep' else 8)
-        self.progress['value'] = self.collected
-        if self.busy:
-            self.progress.pack(fill='x', pady=(15, 0))
-        findings = self.report['findings'] if self.report else []
-        active = sum(f['active'] and f['severity'] != 'info' for f in findings)
-        coverage = self.report['coverage'] if self.report else {}
-        count = (sum(v=='complete' for v in self.report['coverage_details'].values()) if self.report and 'coverage_details' in self.report
-                 else sum(coverage.values()) if self.report else self.collected)
-        expected = len(coverage) if self.report else (14 if self.mode == 'deep' else 8)
-        self.metrics(p, [(self.t('risk'), active if self.report else '—', self.t('risk_hint')),
-                         (self.t('sections'), f'{count} / {expected}' if count or self.report else '—', self.t('sections_hint')),
-                         (self.t('duration'), self.t('seconds', n=self.elapsed) if self.elapsed is not None else '—', self.t('duration_hint'))])
-        foot = self.t('demo') if self.demo else self.t('limit')
-        label(p, foot, self.p, 9, muted=True, wraplength=870).pack(side='bottom',anchor='w',pady=(13,0))
+        progress_slot = tk.Frame(hero, bg=self.p['card'], height=5)
+        progress_slot.pack(fill='x', pady=(12, 0))
+        progress_slot.pack_propagate(False)
+        self.progress = ttk.Progressbar(progress_slot, mode='determinate')
+        self.metric_labels = self.metrics(p, [(self.t('risk'), '—', self.t('risk_hint')),
+                         (self.t('sections'), '—', self.t('sections_hint')),
+                         (self.t('duration'), '—', self.t('duration_hint'))])
+        self.foot_label = label(p, '', self.p, 9, muted=True, wraplength=870)
+        self.foot_label.pack(side='bottom',anchor='w',pady=(13,0))
         panel = card(p, self.p); panel.pack(fill='both', expand=True)
         toolbar = tk.Frame(panel, bg=self.p['card']); toolbar.pack(fill='x', padx=16, pady=13)
         label(toolbar, self.t('list_title'), self.p, 11, True).pack(side='left')
@@ -152,14 +148,55 @@ class AuditApp(DesktopApp):
                           insertbackground=self.p['text'], relief='flat', font=('Segoe UI', 10), width=14)
         search.pack(side='right', padx=10, ipady=6)
         label(toolbar,self.t('search'),self.p,9,muted=True).pack(side='right')
-        self.search.trace_add('write', lambda *_: self.refresh_table())
+        self.search.trace_add('write', self.schedule_search)
         self.details = text_area(panel, self.p, height=3)
         self.tree = self.table(panel, [('priority', self.t('priority'), 155), ('finding', self.t('finding'), 460)], heights=3)
         self.tree.bind('<<TreeviewSelect>>', self.select_finding)
         for severity, color in [('high','red'), ('warning','amber'), ('info','muted')]:
             self.tree.tag_configure(severity, foreground=self.p[color])
-        put_text(self.details, self.t('selected') if self.report else self.t('empty'))
-        self.refresh_table()
+        self.update_inspection(refresh_findings=True)
+
+    def update_inspection(self, refresh_findings=False):
+        self.status_label.configure(text='●  '+self.t(self.state_key),
+            fg=self.p['blue'] if self.busy else self.p['accent'])
+        for mode, control in self.mode_buttons.items():
+            control.configure(primary=mode == self.mode, state='disabled' if self.busy else 'normal')
+        self.scope_label.configure(text=self.t('scope_'+self.mode))
+        self.start_button.configure(text=self.t('stop' if self.busy else 'start'), command=self.cancel if self.busy else self.start)
+        self.export_button.configure(state='normal' if self.report else 'disabled')
+        expected = 14 if self.mode == 'deep' else 8
+        self.progress.configure(maximum=expected, value=self.collected)
+        if self.busy:
+            self.progress.pack(fill='both', expand=True)
+        else:
+            self.progress.pack_forget()
+        self.stage_label.configure(text=self.stage_text())
+        self.foot_label.configure(text=self.t('demo' if self.demo else 'limit'))
+        if self.report:
+            active = sum(f['active'] and f['severity'] != 'info' for f in self.report['findings'])
+            coverage = self.report['coverage']
+            details = self.report.get('coverage_details')
+            count = sum(value == 'complete' for value in details.values()) if details else sum(coverage.values())
+            values = (str(active), f'{count} / {len(coverage)}', self.t('seconds', n=self.elapsed) if self.elapsed is not None else '—')
+        else:
+            values = ('—', f'{self.collected} / {expected}' if self.busy else '—', '—')
+        for widget, value in zip(self.metric_labels, values):
+            widget.configure(text=value)
+        if refresh_findings:
+            put_text(self.details, self.t('selected') if self.report else self.t('empty'))
+            self.refresh_table()
+
+    def schedule_search(self, *_):
+        self.search_value = self.search.get()
+        pending = getattr(self, 'search_job', None)
+        if pending:
+            self.root.after_cancel(pending)
+        tree = self.tree
+        def refresh():
+            self.search_job = None
+            if tree.winfo_exists():
+                self.refresh_table()
+        self.search_job = self.root.after(110, refresh)
 
     def stage_text(self):
         if self.busy:
@@ -171,7 +208,7 @@ class AuditApp(DesktopApp):
     def set_mode(self, mode):
         if not self.busy:
             self.mode = mode
-            self.render()
+            self.update_inspection()
 
     def change_filter(self, _=None):
         self.filter_key = ('all','high','warning','info')[self.filter_box.current()]
@@ -206,7 +243,7 @@ class AuditApp(DesktopApp):
         self.report=None; self.report_path=None; self.elapsed=None
         self.cancel_event = threading.Event()
         mode = self.mode
-        self.render()
+        self.update_inspection(refresh_findings=True)
         def run():
             started = time.monotonic()
             try:
@@ -225,7 +262,9 @@ class AuditApp(DesktopApp):
         self.cancel_event.set()
 
     def close(self):
-        self.closed=True; self.cancel()
+        self.closed=True
+        self.root.withdraw()
+        self.cancel()
         if hasattr(self,'worker') and self.worker.is_alive():
             self.worker.join(4)
         self.root.destroy()
@@ -240,6 +279,7 @@ class AuditApp(DesktopApp):
             if self.nav == 0:
                 self.progress['value'] = self.collected
                 self.stage_label.configure(text=self.stage_text())
+                self.metric_labels[1].configure(text=f'{self.collected} / {int(self.progress["maximum"])}')
             return
         self.busy = False
         if kind == 'finished':
@@ -259,10 +299,11 @@ class AuditApp(DesktopApp):
             self.state_key = 'cancelled'
         elif kind == 'error':
             self.state_key = 'failed'
-            self.render()
             messagebox.showerror(self.t('error_title'), audit.localize_error(event['message'], self.language), parent=self.root)
-            return
-        self.render()
+        if self.nav == 0:
+            self.update_inspection(refresh_findings=True)
+        elif kind == 'finished':
+            self.render()
 
     def open_report(self):
         if not self.report:return
@@ -330,20 +371,24 @@ def self_test(artifacts):
         app.select_nav(1); root.update(); app.select_nav(0)
         app.filter_key='info'; app.refresh_table(); assert not app.tree.get_children()
         root.geometry('1000x740'); root.update()
-        for widget in (app.start_button,app.details,app.language_box,app.theme_button):
+        for widget in (app.start_button,app.details,app.language_switch,app.theme_button):
             assert widget.winfo_ismapped()
             assert widget.winfo_rooty()+widget.winfo_height() <= root.winfo_rooty()+root.winfo_height()
-        app.language_box.set('Русский'); app.language_box.event_generate('<<ComboboxSelected>>'); root.update()
+        app.language_buttons['ru'].invoke(); root.update()
         assert app.language=='ru'
         old=app.theme; app.theme_button.invoke(); root.update(); assert app.theme!=old
         def fake_scanner(deep,cancel,notify,timeout):
             notify(dict(type='coverage',count=8))
             return fixture
-        app.scanner=fake_scanner; app.filter_key='all'; app.start_button.invoke()
+        app.scanner=fake_scanner; app.filter_key='all'
+        tree, start_button = app.tree, app.start_button
+        app.start_button.invoke()
         deadline=time.monotonic()+5
         while app.busy and time.monotonic()<deadline:
             root.update(); time.sleep(.02)
         assert not app.busy and app.report_path.is_file()
+        assert app.tree is tree and app.start_button is start_button
+        assert app.language_buttons['ru'].primary and not app.language_buttons['en'].primary
         app.export_button.invoke();assert opened[-1]==app.report_path and opened[-1].is_file()
         app.select_nav(1); root.update(); assert app.history_paths
         app.select_nav(0)

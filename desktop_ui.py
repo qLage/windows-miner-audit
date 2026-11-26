@@ -10,13 +10,14 @@ import struct
 import sys
 import tkinter as tk
 from tkinter import ttk
+from tkinter import font as tkfont
 import zlib
 
 PALETTES = {
-    'dark': dict(bg='#0c121c', side='#111a27', card='#162131', field='#111b29', line='#29374b',
-                 text='#eef4ff', muted='#94a6c1', hover='#22324a', accent='#68e0b6', ink='#092a21',
+    'dark': dict(bg='#111113', side='#17171b', card='#202025', field='#29292f', line='#35353d',
+                 text='#f3f3f7', muted='#a2a2b2', hover='#34343e', accent='#68e0b6', ink='#092a21',
                  red='#ff939c', amber='#f4c574', blue='#90baff', selected='#283e50'),
-    'light': dict(bg='#f1f4f9', side='#ffffff', card='#ffffff', field='#f5f7fb', line='#d9e1ed',
+    'light': dict(bg='#f3f4f7', side='#ffffff', card='#ffffff', field='#edeff4', line='#e0e3eb',
                   text='#19283f', muted='#60718a', hover='#e7edf7', accent='#137d60', ink='#ffffff',
                   red='#b42c45', amber='#916013', blue='#2868ae', selected='#dbeee7'),
 }
@@ -49,10 +50,14 @@ def windows_setup(root, dark):
     if sys.platform != 'win32':
         return
     try:
-        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        from ctypes import wintypes
+        user=ctypes.windll.user32; dwm=ctypes.windll.dwmapi
+        user.GetAncestor.argtypes=[wintypes.HWND,wintypes.UINT];user.GetAncestor.restype=wintypes.HWND
+        dwm.DwmSetWindowAttribute.argtypes=[wintypes.HWND,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD]
+        hwnd=user.GetAncestor(root.winfo_id(),2)
         value = ctypes.c_int(bool(dark))
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), 4)
-        for attribute, color in ((35, 0x1c120c if dark else 0xf9f4f1), (36, 0xfff4ee if dark else 0x3f2819)):
+        for attribute, color in ((35, 0x1b1717 if dark else 0xf7f4f3), (36, 0xf7f3f3 if dark else 0x3f2819)):
             native_color=ctypes.c_uint(color)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(native_color), 4)
     except (AttributeError, OSError):
@@ -64,20 +69,80 @@ def label(parent, text, palette, size=10, bold=False, muted=False, **kwargs):
                     font=('Segoe UI', size, 'bold' if bold else 'normal'), anchor='w', **kwargs)
 
 
-def button(parent, text, command, palette, primary=False, width=None):
-    kwargs = dict(text=text, command=command, font=('Segoe UI', 10, 'bold'), relief='flat', bd=0,
-                  bg=palette['accent'] if primary else palette['field'],
-                  fg=palette['ink'] if primary else palette['text'],
-                  activebackground=palette['hover'], activeforeground=palette['text'],
-                  padx=17, pady=8, cursor='hand2', takefocus=True,
-                  highlightthickness=1, highlightbackground=palette['line'], highlightcolor=palette['accent'])
-    if width:
-        kwargs['width'] = width
-    return tk.Button(parent, **kwargs)
+def round_shape(canvas,x1,y1,x2,y2,radius,**kwargs):
+    r=min(radius,(x2-x1)/2,(y2-y1)/2)
+    return canvas.create_polygon(x1+r,y1,x2-r,y1,x2,y1,x2,y1+r,x2,y2-r,x2,y2,x2-r,y2,
+        x1+r,y2,x1,y2,x1,y2-r,x1,y1+r,x1,y1,smooth=True,splinesteps=24,**kwargs)
+
+
+class RoundedButton(tk.Canvas):
+    def __init__(self,parent,text,command,palette,primary=False,width=None,anchor='center',active=False):
+        self.palette=palette;self.primary=primary;self.command=command;self.text=text;self.state='normal'
+        self.padx=18;self.pady=10;self.hovered=False;self.focused=False;self.anchor=anchor;self.active=active
+        self.font=tkfont.Font(family='Segoe UI',size=10,weight='bold')
+        self.minimum_width=(width or 0)*8
+        super().__init__(parent,bg=parent.cget('bg'),highlightthickness=0,bd=0,takefocus=1,cursor='hand2')
+        self.bind('<Configure>',lambda _:self.draw())
+        self.bind('<Enter>',lambda _:self.hover(True));self.bind('<Leave>',lambda _:self.hover(False))
+        self.bind('<Button-1>',lambda _:self.invoke());self.bind('<space>',lambda _:self.invoke());self.bind('<Return>',lambda _:self.invoke())
+        self.bind('<FocusIn>',lambda _:self.focus(True));self.bind('<FocusOut>',lambda _:self.focus(False))
+        self.resize()
+
+    def resize(self):
+        super().configure(width=max(self.minimum_width,self.font.measure(self.text)+self.padx*2),height=self.font.metrics('linespace')+self.pady*2)
+        self.draw()
+
+    def configure(self,cnf=None,**kwargs):
+        if isinstance(cnf,dict):kwargs.update(cnf)
+        resized=False
+        for key in ('text','command','state','padx','pady'):
+            if key in kwargs:
+                setattr(self,key,kwargs.pop(key));resized=True
+        if kwargs:super().configure(**kwargs)
+        if resized:self.resize()
+        else:self.draw()
+    config=configure
+
+    def cget(self,key):
+        if key in ('state','text','command'):return getattr(self,key)
+        return super().cget(key)
+
+    def invoke(self):
+        if self.state!='disabled' and self.command:return self.command()
+
+    def hover(self,value):self.hovered=value;self.draw()
+    def focus(self,value):self.focused=value;self.draw()
+
+    def draw(self):
+        if not self.winfo_exists():return
+        p=self.palette;disabled=self.state=='disabled'
+        fill=p['field'] if disabled else p['accent'] if self.primary else p['selected'] if self.active else p['hover'] if self.hovered else p['field']
+        foreground=p['muted'] if disabled else p['ink'] if self.primary else p['accent'] if self.active else p['text']
+        self.delete('all')
+        w=max(self.winfo_width(),int(super().cget('width')));h=int(super().cget('height'))
+        round_shape(self,1,1,w-1,h-1,10,fill=fill,outline=p['accent'] if self.focused and not disabled else '')
+        self.create_text(self.padx if self.anchor=='w' else w/2,h/2,text=self.text,font=self.font,fill=foreground,anchor=self.anchor)
+
+
+def button(parent,text,command,palette,primary=False,width=None):
+    return RoundedButton(parent,text,command,palette,primary,width)
 
 
 def card(parent, palette, **kwargs):
-    return tk.Frame(parent, bg=palette['card'], highlightbackground=palette['line'], highlightthickness=1, **kwargs)
+    frame=tk.Frame(parent,bg=palette['card'],bd=0,**kwargs)
+    previous=[None]
+    def clip(event):
+        if os.name!='nt' or (event.width,event.height)==previous[0] or event.width<30 or event.height<30:return
+        previous[0]=(event.width,event.height)
+        from ctypes import wintypes
+        gdi=ctypes.windll.gdi32;user=ctypes.windll.user32
+        gdi.CreateRoundRectRgn.restype=wintypes.HANDLE
+        gdi.CreateRoundRectRgn.argtypes=[ctypes.c_int]*6
+        user.SetWindowRgn.argtypes=[wintypes.HWND,wintypes.HANDLE,wintypes.BOOL]
+        region=gdi.CreateRoundRectRgn(0,0,event.width+1,event.height+1,28,28)
+        if not user.SetWindowRgn(frame.winfo_id(),region,True):gdi.DeleteObject(region)
+    frame.bind('<Configure>',clip)
+    return frame
 
 
 def text_area(parent, palette, height=5, expand=False):
@@ -157,6 +222,7 @@ class DesktopApp:
         self.root.option_add('*TCombobox*Listbox.foreground', self.p['text'])
         windows_setup(self.root, self.theme == 'dark')
         self.root.after_idle(lambda: windows_setup(self.root, self.theme == 'dark'))
+        self.root.after(80,lambda:windows_setup(self.root,self.theme=='dark'))
 
     def shell(self, brand, subtitle, navigation):
         for child in self.root.winfo_children():
@@ -168,29 +234,21 @@ class DesktopApp:
         side.pack_propagate(False)
         mark = tk.Canvas(side, width=44, height=44, bg=p['side'], highlightthickness=0)
         mark.pack(anchor='w', padx=24, pady=(30, 12))
-        if self.purple:
-            for offset in range(3):
-                mark.create_arc(3+offset*5, 3+offset*5, 40-offset*5, 40-offset*5,
-                                start=25+offset*65, extent=255, style='arc', width=3, outline=p['accent'])
-        else:
-            mark.create_polygon(22, 2, 40, 9, 37, 28, 22, 42, 7, 28, 4, 9, fill=p['accent'], outline='')
-            mark.create_line(13, 21, 20, 28, 31, 15, fill=p['ink'], width=3)
+        round_shape(mark,1,1,43,43,12,fill=p['accent'],outline='')
+        mark.create_text(22,22,text='VH' if self.purple else 'MA',fill=p['ink'],font=('Segoe UI',12,'bold'))
         label(side, brand, p, 14, True).pack(anchor='w', padx=24,pady=(0,28))
         for index, title in enumerate(navigation):
             active = index == self.nav
-            nav = tk.Button(side, text=('  ●  ' if active else '  ○  ')+title, command=lambda i=index: self.select_nav(i),
-                            bg=p['selected'] if active else p['side'], fg=p['accent'] if active else p['muted'],
-                            activebackground=p['hover'], activeforeground=p['text'], font=('Segoe UI', 10, 'bold'),
-                            relief='flat', anchor='w', bd=0, padx=12, pady=13, cursor='hand2')
+            nav=RoundedButton(side,title,lambda i=index:self.select_nav(i),p,anchor='w',active=active)
             nav.pack(fill='x', padx=12, pady=3)
         bottom = tk.Frame(side, bg=p['side'])
         bottom.pack(side='bottom', fill='x', padx=24, pady=25)
-        label(bottom, 'v0.2.0', p, 9, bold=True, muted=True).pack(anchor='w')
+        label(bottom, 'v0.2.1', p, 9, bold=True, muted=True).pack(anchor='w')
         self.main = tk.Frame(self.root, bg=p['bg'])
         self.main.pack(side='left', fill='both', expand=True, padx=28, pady=18)
         top = tk.Frame(self.main, bg=p['bg'])
         top.pack(fill='x', pady=(0, 14))
-        label(top, self.t('workspace'), p, 10, muted=True).pack(side='left')
+        label(top,self.root.title(),p,20,True).pack(side='left')
         self.theme_button = button(top, self.t('light' if self.theme == 'dark' else 'dark'), self.toggle_theme, p)
         self.theme_button.pack(side='right', padx=(10, 0))
         self.language_box = ttk.Combobox(top, values=['Русский', 'English'], state='readonly', width=11, font=('Segoe UI', 10))

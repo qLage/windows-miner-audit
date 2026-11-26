@@ -14,10 +14,11 @@ from tkinter import ttk, messagebox
 import audit
 from desktop_ui import DesktopApp, benchmark, button, card, capture_window, label, put_text, text_area
 import scan_runtime
+from browser_open import open_local_html
 
 WORDS = {
     'ru': dict(local='На вашем компьютере. Без отправки файлов.', workspace='ОБЗОР СИСТЕМЫ', light='Светлая тема', dark='Тёмная тема',
-        overview='Обзор', findings='Находки', history='История', title='Windows Miner Audit',
+        overview='Проверка', findings='Находки', history='Отчёты', title='Windows Miner Audit',show='Показать',
         subtitle='Смотрите, что запускается, закрепляется и меняет защиту Windows.', ready='Готов к проверке', running='Проверка выполняется',
         complete='Отчёт готов', cancelled='Проверка остановлена', failed='Не удалось завершить проверку',
         quick='Быстрая', deep='Расширенная', start='Начать проверку', stop='Остановить', export='Открыть HTML-отчёт',
@@ -36,7 +37,7 @@ WORDS = {
         acl_blocks='Разрешения папок', remote='Удалённый доступ', health='Свободное место', services='Службы', wmi='Подписки WMI',
         hijacks='Перехваты запуска', connections='Сетевые соединения', performance='Замер CPU', startup_files='Папки автозапуска'),
     'en': dict(local='On your computer. No file uploads.', workspace='SYSTEM OVERVIEW', light='Light theme', dark='Dark theme',
-        overview='Overview', findings='Findings', history='History', title='Windows Miner Audit',
+        overview='Inspection', findings='Findings', history='Reports', title='Windows Miner Audit',show='Show report',
         subtitle='See what runs, persists and changes Windows protection.', ready='Ready to inspect', running='Inspection in progress',
         complete='Report is ready', cancelled='Inspection stopped', failed='Inspection could not finish',
         quick='Quick', deep='Extended', start='Start inspection', stop='Stop', export='Open HTML report',
@@ -58,7 +59,7 @@ WORDS = {
 
 
 class AuditApp(DesktopApp):
-    def __init__(self, root, storage=None, scanner=scan_runtime.scan):
+    def __init__(self, root, storage=None, scanner=scan_runtime.scan, browser_open=open_local_html):
         self.report = None
         self.report_path = None
         self.elapsed = None
@@ -68,19 +69,43 @@ class AuditApp(DesktopApp):
         self.state_key = 'ready'
         self.cancel_event = threading.Event()
         self.scanner = scanner
+        self.browser_open=browser_open
         self.filter_key = 'all'
         self.search_value = ''
         self.demo = False
         super().__init__(root, 'WindowsMinerAudit', WORDS, storage)
+        self.load_latest()
         self.render()
 
+    def read_report(self,path):
+        report=json.loads(Path(path).read_text(encoding='utf-8'))
+        if not isinstance(report,dict) or report.get('status') not in ('incomplete','attention','no_rule_matches') or not isinstance(report.get('findings'),list) or not isinstance(report.get('coverage'),dict):
+            raise ValueError('Unsupported saved report')
+        for item in report['findings']:
+            if not isinstance(item,dict) or item.get('severity') not in ('high','warning','info') or not isinstance(item.get('active'),bool):
+                raise ValueError('Unsupported saved finding')
+            for key in ('title','advice'):
+                if not isinstance(item.get(key),dict) or not all(isinstance(item[key].get(language),str) for language in ('ru','en')):
+                    raise ValueError('Unsupported finding translation')
+            if not isinstance(item.get('evidence'),list) or any(not isinstance(value,str) for value in item['evidence']):
+                raise ValueError('Unsupported finding evidence')
+        if not isinstance(report.get('errors',[]),list):raise ValueError('Unsupported report errors')
+        return report
+
+    def load_latest(self):
+        for path in sorted((self.storage/'reports').glob('audit-*.json'),reverse=True):
+            try:
+                self.report=self.read_report(path);self.report_path=path.with_suffix('.html')
+                self.elapsed=self.report.get('duration_seconds');self.state_key='complete'
+                self.mode='deep' if self.report.get('scan_mode')=='deep' else 'quick'
+                return
+            except (OSError,ValueError,KeyError,TypeError):continue
+
     def render(self):
-        p = self.shell('Miner Audit', '', [self.t('overview'), self.t('findings'), self.t('history')])
-        if self.nav == 2:
+        p = self.shell('Miner Audit', '', [self.t('overview'), self.t('history')])
+        if self.nav == 1:
             self.render_history(p)
             return
-        label(p, self.t('title'), self.p, 21, True).pack(anchor='w')
-        tk.Frame(p,bg=self.p['bg'],height=16).pack()
         hero = card(p, self.p, padx=22, pady=14)
         hero.pack(fill='x', pady=(0, 20))
         row = tk.Frame(hero, bg=self.p['card']); row.pack(fill='x')
@@ -96,9 +121,9 @@ class AuditApp(DesktopApp):
         controls = tk.Frame(hero, bg=self.p['card']); controls.pack(fill='x', pady=(12, 0))
         self.start_button = button(controls, self.t('stop' if self.busy else 'start'), self.cancel if self.busy else self.start, self.p, True)
         self.start_button.pack(side='left')
-        export = button(controls, self.t('export'), self.open_report, self.p)
-        export.configure(state='normal' if self.report_path else 'disabled')
-        export.pack(side='left', padx=(10, 0))
+        self.export_button = button(controls, self.t('export'), self.open_report, self.p)
+        self.export_button.configure(state='normal' if self.report else 'disabled')
+        self.export_button.pack(side='left', padx=(10, 0))
         self.stage_label = label(controls, self.stage_text(), self.p, 9, muted=True, wraplength=300)
         self.stage_label.pack(side='right', padx=(12, 0))
         self.progress = ttk.Progressbar(hero, mode='determinate', maximum=14 if self.mode == 'deep' else 8)
@@ -212,7 +237,7 @@ class AuditApp(DesktopApp):
                 self.collected = event['count']
             else:
                 self.stage = event['section']
-            if self.nav != 2:
+            if self.nav == 0:
                 self.progress['value'] = self.collected
                 self.stage_label.configure(text=self.stage_text())
             return
@@ -240,9 +265,15 @@ class AuditApp(DesktopApp):
         self.render()
 
     def open_report(self):
-        if self.report_path and self.report:
+        if not self.report:return
+        try:
+            if not self.report_path:
+                folder=self.storage/'reports';folder.mkdir(parents=True,exist_ok=True)
+                self.report_path=folder/'report.html'
             self.report_path.write_text(audit.render_html(self.report, self.language), encoding='utf-8')
-            os.startfile(self.report_path)
+            return self.browser_open(self.report_path)
+        except (OSError,ValueError) as error:
+            messagebox.showerror(self.t('error_title'),str(error),parent=self.root)
 
     def render_history(self, parent):
         label(parent, self.t('reports'), self.p, 23, True).pack(anchor='w', pady=(0, 20))
@@ -256,23 +287,33 @@ class AuditApp(DesktopApp):
                 tree.insert('', 'end', iid=str(index), values=(report['generated_utc'][:19].replace('T',' ')+' UTC', self.t(key)))
             except (OSError, ValueError, KeyError):
                 continue
-        def load(_):
+        def load(_=None):
             if tree.selection():
                 path = self.history_paths[int(tree.selection()[0])]
-                self.report = json.loads(path.read_text(encoding='utf-8'))
+                self.report = self.read_report(path)
                 self.elapsed=self.report.get('duration_seconds')
-                self.report_path = path.with_suffix('.html'); self.nav = 1; self.state_key = 'complete'; self.render()
+                self.report_path = path.with_suffix('.html'); self.nav = 0; self.state_key = 'complete'; self.render()
         tree.bind('<Double-1>', load)
+        if tree.get_children():tree.selection_set(tree.get_children()[0])
         label(parent, self.t('report_empty') if not self.history_paths else self.t('saved'), self.p, 10, muted=True).pack(anchor='w', pady=15)
         def folder():
             path = self.storage / 'reports'; path.mkdir(parents=True, exist_ok=True); os.startfile(path)
-        button(parent, self.t('folder'), folder, self.p).pack(anchor='w')
+        actions=tk.Frame(parent,bg=self.p['bg']);actions.pack(fill='x')
+        button(actions,self.t('show'),load,self.p,True).pack(side='left')
+        def open_saved():
+            if tree.selection():
+                path=self.history_paths[int(tree.selection()[0])]
+                self.report=self.read_report(path);self.report_path=path.with_suffix('.html')
+                self.open_report()
+        button(actions,self.t('export'),open_saved,self.p).pack(side='left',padx=10)
+        button(actions, self.t('folder'), folder, self.p).pack(side='left')
 
 
 def self_test(artifacts):
     artifacts = Path(artifacts); artifacts.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as storage:
-        root = tk.Tk(); app = AuditApp(root, storage=storage)
+        opened=[]
+        root = tk.Tk(); app = AuditApp(root, storage=storage,browser_open=lambda path:opened.append(Path(path)))
         fixture = json.loads((Path(__file__).parent / 'examples/suspicious.json').read_text(encoding='utf-8'))
         app.report = audit.analyze(fixture); app.state_key = 'complete'; app.elapsed = 4.2; app.demo = True
         checked = []
@@ -286,7 +327,7 @@ def self_test(artifacts):
                 assert app.details.get('1.0','end').strip()
                 capture_window(root, artifacts / f'audit-{language}-{theme}.png')
                 checked.append(f'{language}/{theme}')
-        app.select_nav(2); root.update(); app.select_nav(0)
+        app.select_nav(1); root.update(); app.select_nav(0)
         app.filter_key='info'; app.refresh_table(); assert not app.tree.get_children()
         root.geometry('1000x740'); root.update()
         for widget in (app.start_button,app.details,app.language_box,app.theme_button):
@@ -303,7 +344,8 @@ def self_test(artifacts):
         while app.busy and time.monotonic()<deadline:
             root.update(); time.sleep(.02)
         assert not app.busy and app.report_path.is_file()
-        app.select_nav(2); root.update(); assert app.history_paths
+        app.export_button.invoke();assert opened[-1]==app.report_path and opened[-1].is_file()
+        app.select_nav(1); root.update(); assert app.history_paths
         app.select_nav(0)
         def cancellable(deep,cancel,notify,timeout):
             cancel.wait(3)
@@ -314,7 +356,7 @@ def self_test(artifacts):
             root.update(); time.sleep(.02)
         assert app.state_key=='cancelled' and not app.busy
         app.close()
-    return dict(ok=True, views=checked, languages=2, themes=2,minimum_layout=True,start_cancel=True,history=True,language_theme_controls=True)
+    return dict(ok=True, views=checked, languages=2, themes=2,minimum_layout=True,start_cancel=True,history=True,language_theme_controls=True,browser_button=True)
 
 
 def main():

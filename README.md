@@ -16,6 +16,9 @@
 
 ## Интерфейс
 
+В интерфейсе два раздела: «Проверка» и «Отчёты». При запуске восстанавливается последний отчёт. Кнопка HTML открывает его в веб-браузере, выбранном для HTTPS, даже если файлы `.html` назначены на редактор. В истории есть отдельные кнопки просмотра и открытия в браузере.
+
+
 - Русский и английский языки, тёмная и светлая темы. Выбор сохраняется локально.
 - Быстрая проверка: 8 разделов. Расширенная: 14 разделов.
 - Кнопка остановки, фактический ход сбора, поиск и фильтр находок.
@@ -83,6 +86,9 @@ A portable application: run one `.exe`. No Python installation, administrator pr
 ![Windows Miner Audit — English, light theme](docs/screenshots/light-en.png)
 
 ## Interface
+
+The interface has two sections: Inspection and Reports. The most recent saved report is restored on startup. HTML reports open in the registered HTTPS web browser even when `.html` files are associated with an editor. Report history has explicit view and browser-open actions.
+
 
 - Russian and English, dark and light themes; preferences saved locally.
 - Quick inspection covers 8 areas; extended inspection covers 14.

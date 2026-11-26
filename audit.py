@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timezone
 import html
 import ipaddress
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
 import sys
 
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 STATUS_RU = {'incomplete': 'Проверка неполная', 'attention': 'Требуется проверка находок',
              'no_rule_matches': 'Нет активных совпадений правил'}
 SEVERITY_RU = {'high': 'Высокий приоритет', 'warning': 'Предупреждение', 'info': 'Сведения'}
 SEVERITIES = {'high': 0, 'warning': 1, 'info': 2}
 EXPECTED_SECTIONS = {'processes', 'tasks', 'startup', 'defender', 'hosts', 'acl_blocks', 'remote', 'health'}
+DEEP_SECTIONS = {'services', 'wmi', 'hijacks', 'connections', 'performance', 'startup_files'}
 SUSPICIOUS_PATH = re.compile(r'\\(?:WindowsTask|ReaItekHD|Windows Tasks Service)\\', re.I)
 MASQUERADE = {'audiodg.exe', 'taskhost.exe', 'taskhostw.exe', 'winlogon.exe',
               'svchost.exe', 'microsofthost.exe', 'apphost.exe', 'steamwebhelper.exe'}
@@ -36,13 +39,31 @@ def redact(value: object) -> str:
     text = re.sub(r'(?i)((?:https?|stratum\+(?:tcp|ssl))://)[^\s/@:]+:[^\s/@]+@', r'\1[REDACTED]@', text)
     text = re.sub(r'(?i)([?&](?:token|key|password|auth)=)[^&\s]+', r'\1[REDACTED]', text)
     text = re.sub(r'(?i)([A-Z]:\\Users\\)[^\\\s"]+', r'\1<user>', text)
+    text = re.sub(r'(?i)((?:-EncodedCommand|-enc|-e)\s+)[A-Za-z0-9+/=]{8,}',r'\1[ENCODED PAYLOAD]',text)
     return text[:1400]
 
 
+def inspect_encoded_command(command: str) -> str:
+    if not re.search(r'\b(?:powershell|pwsh)(?:\.exe)?\b',command,re.I):
+        return command
+    match=re.search(r'(?:^|\s)(?:-EncodedCommand|-enc|-e)\s+([A-Za-z0-9+/=]{8,65536})(?=\s|$)',command,re.I)
+    if match:
+        try:
+            decoded=base64.b64decode(match[1],validate=True).decode('utf-16-le')
+            return command+'\n'+decoded
+        except (ValueError,UnicodeError):
+            pass
+    return command
+
+
 def miner_command(command: str) -> bool:
+    command=inspect_encoded_command(command)
     pool = re.search(r'(?:^|\s)(?:-o|--url|--pool)(?:[=\s])|stratum\+(?:tcp|ssl)://', command, re.I)
     tuning = re.search(r'--(?:cpu-max-threads-hint|donate-level|randomx|algo|coin|cpu-priority|cc-url)(?:[=\s])', command, re.I)
-    return bool(pool and tuning)
+    explicit_protocol = re.search(r'stratum\+(?:tcp|ssl)://', command, re.I)
+    wallet = re.search(r'(?:^|\s)(?:-u|--user|--wallet)(?:[=\s])', command, re.I)
+    algorithm = re.search(r'(?:^|\s)(?:-a|--algorithm)\s+(?:kawpow|ethash|etchash|randomx|rx/0|equihash|autolykos2|ghostrider|blake3)\b', command, re.I)
+    return bool(pool and (tuning or algorithm or (explicit_protocol and wallet)))
 
 
 def risky_path(path: str) -> bool:
@@ -53,8 +74,11 @@ def analyze(snapshot: dict) -> dict:
     if not isinstance(snapshot, dict) or snapshot.get('schema_version') != 1:
         raise ValueError('Unsupported snapshot: schema_version must be 1')
     findings = []
+    if not isinstance(snapshot.get('errors', []), list):
+        raise ValueError('errors must be an array')
     errors = [redact(e) for e in snapshot.get('errors', [])]
-    for section in EXPECTED_SECTIONS:
+    expected = EXPECTED_SECTIONS | (DEEP_SECTIONS if snapshot.get('scan_mode') == 'deep' else set())
+    for section in expected:
         if section not in snapshot:
             errors.append(f'Missing collection section: {section}')
     for section in ('processes', 'tasks', 'startup', 'hosts', 'acl_blocks', 'health'):
@@ -66,11 +90,18 @@ def analyze(snapshot: dict) -> dict:
     for section in ('processes', 'tasks', 'startup', 'acl_blocks', 'health'):
         if any(not isinstance(row, dict) for row in snapshot.get(section, [])):
             raise ValueError(f'{section} entries must be objects')
+    for section in DEEP_SECTIONS:
+        if section in snapshot and (not isinstance(snapshot[section], list) or
+                                   any(not isinstance(row, dict) for row in snapshot[section])):
+            raise ValueError(f'{section} must be an array of objects')
     for key in ('paths', 'policy_paths', 'extensions', 'policy_extensions'):
         if not isinstance(snapshot.get('defender', {}).get(key, []), list):
             raise ValueError(f'defender.{key} must be an array')
-    if not isinstance(snapshot.get('errors', []), list):
-        raise ValueError('errors must be an array')
+    for section,key in (('performance','cpu_percent'),('health','free_gb')):
+        for row in snapshot.get(section,[]):
+            number=row.get(key)
+            if number is not None and (isinstance(number,bool) or not isinstance(number,(int,float)) or not math.isfinite(number) or number<0):
+                raise ValueError(f'{section}.{key} must be a non-negative finite number')
 
     def add(rule, severity, en, ru, evidence, advice_en, advice_ru, active=True):
         findings.append(dict(rule=rule, severity=severity, active=active,
@@ -92,7 +123,7 @@ def analyze(snapshot: dict) -> dict:
                 'Check the file publisher, installation source and related startup entries. An unsigned file alone does not prove malware.',
                 'Проверьте издателя, источник установки и автозапуск. Отсутствие подписи само по себе не доказывает заражение.')
 
-    for kind in ('tasks', 'startup'):
+    for kind in ('tasks', 'startup', 'services', 'startup_files'):
         for entry in snapshot.get(kind, []):
             command = str(entry.get('command') or '')
             if not (SUSPICIOUS_PATH.search(command) or miner_command(command)):
@@ -104,6 +135,54 @@ def analyze(snapshot: dict) -> dict:
                 [kind, entry.get('name', ''), command],
                 'Inspect the target and task state. A disabled reference is not evidence of a running infection.',
                 'Проверьте цель и состояние задачи. Отключённая запись не означает активное заражение.', active)
+
+    for entry in snapshot.get('wmi', []):
+        command = str(entry.get('command') or '')
+        strong = miner_command(command) or bool(SUSPICIOUS_PATH.search(command))
+        add('wmi-consumer', 'high' if strong else 'info',
+            'Permanent WMI event consumer', 'Постоянный обработчик событий WMI',
+            [entry.get('name', ''), entry.get('kind', ''), command],
+            'WMI subscriptions can be legitimate management. Check the consumer command and its owner before changing anything.',
+            'Подписки WMI могут использоваться администрированием. Проверьте команду и владельца перед изменениями.')
+    for entry in snapshot.get('hijacks', []):
+        command = str(entry.get('command') or '')
+        strong = miner_command(command) or bool(SUSPICIOUS_PATH.search(command))
+        add('execution-hook', 'high' if strong else 'info',
+            'Process launch or logon hook configured', 'Настроен перехват запуска или входа',
+            [entry.get('name', ''), entry.get('kind', ''), command],
+            'Debuggers and optimization tools also use these settings. Verify the executable; a hook alone is not malware.',
+            'Отладчики и оптимизаторы тоже используют эти настройки. Проверьте файл: один перехват не доказывает заражение.')
+    for entry in snapshot.get('startup_files', []):
+        command = str(entry.get('command') or '')
+        inspected=inspect_encoded_command(command)
+        tamper = re.search(r'(?:Add|Set)-MpPreference.{0,180}(?:Exclusion|DisableRealtimeMonitoring)', inspected, re.I | re.S)
+        download = re.search(r'DownloadString|DownloadFile|Invoke-WebRequest|https?://', inspected, re.I)
+        execute = re.search(r'\b(?:iex|Invoke-Expression|Start-Process)\b', inspected, re.I)
+        if tamper or (download and execute):
+            add('startup-script', 'high' if tamper and download and execute else 'warning',
+                'Startup script changes protection or downloads executable content',
+                'Скрипт автозапуска меняет защиту или загружает исполняемый код',
+                [entry.get('name', ''), command],
+                'Read the script as text and confirm its origin. Never execute it to test whether it is malicious.',
+                'Прочитайте скрипт как текст и уточните источник. Не запускайте его для проверки вредоносности.')
+    by_pid = {row.get('pid'): row for row in snapshot.get('processes', [])}
+    for connection in snapshot.get('connections', []):
+        proc = by_pid.get(connection.get('pid'), {})
+        path = str(proc.get('path') or '')
+        if risky_path(path) and proc.get('signature') in ('NotSigned', 'HashMismatch', 'NotTrusted'):
+            add('pool-port-correlation', 'warning', 'Untrusted process uses a port also used by mining pools',
+                'Недоверенный процесс использует порт, встречающийся у пулов майнинга',
+                [path, f'PID {connection.get("pid")}; remote port {connection.get("port")}'],
+                'Port numbers are not proof. Correlate with the command line, publisher and authorized applications.',
+                'Номер порта не доказывает майнинг. Сопоставьте команду, издателя и разрешённые программы.')
+    for sample in snapshot.get('performance', []):
+        proc = by_pid.get(sample.get('pid'), {})
+        if sample.get('cpu_percent', 0) >= 15 and proc.get('signature') in ('NotSigned', 'HashMismatch', 'NotTrusted') and risky_path(str(proc.get('path') or '')):
+            add('cpu-correlation', 'warning', 'High CPU use by an untrusted executable in a writable location',
+                'Высокая нагрузка CPU у недоверенного файла в доступной для записи папке',
+                [proc.get('path', ''), f'CPU sample: {sample["cpu_percent"]}%'],
+                'A one-second sample is a lead, not a mining verdict. Games, updates and compilers can legitimately use CPU.',
+                'Секундный замер — повод для разбора, а не вердикт о майнинге. Игры, обновления и компиляторы тоже нагружают CPU.')
 
     defender = snapshot.get('defender', {})
     for key in ('paths', 'policy_paths', 'extensions', 'policy_extensions'):
@@ -170,10 +249,21 @@ def analyze(snapshot: dict) -> dict:
                 'Проверьте крупные файлы и хранилища приложений. Не удаляйте незнакомые системные файлы.')
     findings.sort(key=lambda item: SEVERITIES[item['severity']])
     attention = any(f['active'] and f['severity'] != 'info' for f in findings)
+    coverage_details = {section: 'complete' if section in snapshot else 'missing' for section in sorted(expected)}
+    for error in errors:
+        section = error.split(':', 1)[0]
+        if error.startswith('Some process paths/'):
+            section = 'processes'
+        elif error.startswith('ACL:'):
+            section = 'acl_blocks'
+        if section in coverage_details and coverage_details[section] != 'missing':
+            coverage_details[section] = 'partial'
     return dict(schema_version=1, version=VERSION, generated_utc=datetime.now(timezone.utc).isoformat(),
                 status='incomplete' if errors else ('attention' if attention else 'no_rule_matches'),
                 findings=findings, errors=errors,
-                coverage={section: section in snapshot for section in sorted(EXPECTED_SECTIONS)})
+                scan_mode=snapshot.get('scan_mode', 'quick'),
+                coverage_details=coverage_details,
+                coverage={section: section in snapshot for section in sorted(expected)})
 
 
 def render_html(report: dict, lang: str) -> str:
@@ -209,13 +299,13 @@ article.high{{border-color:#ff7b87}}article.warning{{border-color:#f9c66e}}pre{{
 <footer>{esc(report['generated_utc'])} · UTC · {'Отчёт может содержать личные пути. Проверьте перед публикацией.' if ru else 'Reports may contain private paths. Review before sharing.'}</footer></main></html>'''
 
 
-def collect(timeout: int) -> dict:
+def collect(timeout: int, deep: bool = False) -> dict:
     if sys.platform != 'win32':
         raise RuntimeError('Live collection requires Windows. Use --snapshot for offline analysis.')
     powershell = Path(__import__('os').environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     try:
         completed = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-                                    '-File', str(Path(__file__).with_name('collect.ps1'))],
+                                    '-File', str(Path(__file__).with_name('collect.ps1'))] + (['-Deep'] if deep else []),
                                    capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired as error:
         snapshot = decode_collector(error.stdout or b'')
@@ -273,6 +363,7 @@ def make_parser(lang: str) -> argparse.ArgumentParser:
     parser.add_argument('--output', type=Path, default=Path('reports'), help='Папка отчётов (по умолчанию reports)' if ru else 'Report directory (default: reports)')
     parser.add_argument('--lang', choices=['ru', 'en'], default=lang, help='Язык консоли и HTML-отчёта' if ru else 'Console and HTML report language')
     parser.add_argument('--timeout', type=int, default=90, help='Ограничение времени сбора, секунды (90)' if ru else 'Collection timeout in seconds (90)')
+    parser.add_argument('--deep', action='store_true', help='Расширенная проверка служб, WMI, перехватов и сети' if ru else 'Inspect services, WMI, execution hooks and network correlations')
     parser.add_argument('--version', action='version', version=VERSION, help='Показать версию' if ru else 'Show version')
     return parser
 
@@ -289,7 +380,7 @@ def main(argv=None) -> int:
     parser = make_parser(language)
     args = parser.parse_args(argv)
     try:
-        snapshot = json.loads(args.snapshot.read_text(encoding='utf-8-sig')) if args.snapshot else collect(args.timeout)
+        snapshot = json.loads(args.snapshot.read_text(encoding='utf-8-sig')) if args.snapshot else collect(args.timeout, args.deep)
         report = analyze(snapshot)
         args.output.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')

@@ -8,3 +8,8 @@ snapshots/
 .env.*
 Thumbs.db
 .DS_Store
+build/
+dist/
+gui-artifacts/
+*.spec
+WindowsMinerAudit-data/

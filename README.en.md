@@ -1,68 +1,65 @@
 # Windows Miner Audit
 
-**Understand suspicious Windows activity before changing anything.**
+[Русский](README.ru.md) · [Home](README.md) · Windows 10/11 x64
 
-[Русский](README.ru.md) · [Bilingual home](README.md) · Python 3.10+ · Windows 10/11 · No third-party Python packages
+## Download and run
 
-Windows Miner Audit is a lightweight, read-only triage tool inspired by a real investigation involving disguised miners, malicious scheduled tasks, broad Defender exclusions and blocked security websites. It produces a self-contained HTML report and machine-readable JSON. It does not delete files, stop processes, change Defender settings or upload data.
+**[Download WindowsMinerAudit.exe](https://github.com/qLage/windows-miner-audit/releases/latest/download/WindowsMinerAudit.exe)**
 
-> This is a heuristic audit, not an antivirus or a certificate that a computer is clean. A legitimate miner can match the mining rule. Configuration findings need human review.
+A portable application: run one `.exe`. No Python installation, administrator privileges, shortcuts or Windows registration are needed for ordinary use. Settings and reports live in `WindowsMinerAudit-data` beside the executable. Use a writable folder and move this data folder with the executable to retain settings. The bundled Python/Tk runtime temporarily extracts into TEMP and is removed on normal exit.
 
-## Quick start
+![Windows Miner Audit — English, light theme](docs/screenshots/light-en.png)
 
-1. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/windows/), with Python available on PATH.
-2. Download or clone this repository and extract it to a folder.
-3. Double-click `Start-Audit.cmd` for a Russian report, or open a terminal in this folder:
+## Interface
 
-```powershell
-python audit.py --lang en
-```
+- Russian and English, dark and light themes; preferences saved locally.
+- Quick inspection covers 8 areas; extended inspection covers 14.
+- Stop control, actual collection progress, search and finding filters.
+- Select a finding to see evidence, reasoning and recommended next steps.
+- Local report history; HTML and JSON are stored beside the executable.
 
-Open the HTML path printed in the terminal. Reports are stored in `reports/`; each run uses a unique filename. A normal terminal works, but protected processes and some security settings may be inaccessible. For broader coverage, use a terminal opened as administrator. Errors remain visible as **incomplete**, never silently interpreted as a clean result.
+No inspection runs at rest. Collection starts in an owned subprocess only after you request it; stopping it terminates only that collector. There is no background service, autostart, web engine or automatic file upload.
 
-The collector runs Windows PowerShell with a process-scoped execution-policy bypass. It does not change the machine's execution policy. Do not disable antivirus protection to run this tool.
+## Detection scope
 
-## What it checks
-
-| Area | Signals | Interpretation |
-|---|---|---|
-| Running processes | Pool endpoint **and** mining tuning arguments | Strong mining indication; verify authorization |
-| Process identity | Familiar executable name, unusual writable location and untrusted signature | Corroborated impersonation heuristic |
-| Persistence | Scheduled tasks and Run/RunOnce references to known suspicious path patterns or mining commands | Disabled references are informational; running processes are never exempted by a folder name |
-| Defender | Effective and policy exclusions; realtime/script/tamper protection | Broad exclusions and disabled protection need review |
-| Hosts | Active redirects affecting security and update domains | Could be deliberate filtering; comments are ignored |
-| Folder permissions | Explicit write-deny ACLs on selected antivirus directories | Can obstruct installation; never automatically reset |
-| Remote access | RDP configuration and port 3389 listener | Informational exposure, not a malware verdict |
-| Storage | Local fixed drives with under 2 GB free | Possible performance or installation problem |
-
-Rules do not classify every unsigned app, Steam subprocess, VPN driver, optimizer setting or high-CPU process as malware. The tool does not inspect passwords, browser profiles, file contents across the disk, network payloads, kernel memory or all possible persistence methods. It does not detect every miner, rootkit or remote-access tool. Reports show coverage and collection errors.
-
-## CLI and results
-
-```powershell
-python audit.py --lang ru --output reports --timeout 90
-python audit.py --snapshot examples/suspicious.json --output reports/demo --lang en
-python -m unittest discover -s tests -v
-```
-
-`--snapshot` analyzes an existing schema-v1 JSON instead of the live computer. The included example is entirely synthetic. Offline analysis and tests also run on Linux/macOS; live collection requires Windows PowerShell 5.1 with the standard CIM, ScheduledTasks, Defender and NetTCPIP modules.
-
-| Exit code | Meaning |
+| Quick inspection | Extended inspection adds |
 |---|---|
-| 0 | No active high/warning rule matches; informational findings may exist |
-| 1 | Active findings need review |
-| 2 | Collection incomplete, invalid input, timeout or another execution failure |
+| Processes, pool endpoints and CPU/GPU mining options | Services and permanent WMI consumers |
+| System-name impersonation and bounded signature checks | IFEO, Winlogon and AppInit hooks |
+| Scheduled tasks, Run and RunOnce | Startup-folder scripts and shortcuts |
+| Effective and policy-based Defender exclusions | Correlations with selected pool-related ports |
+| Defender protection, hosts and security-directory deny ACLs | A one-second CPU sample correlated with path/signature |
+| RDP configuration and free storage | At most 40 distinct writable-location executable signatures |
 
-`status` is `no_rule_matches`, `attention` or `incomplete`. Severity is a review priority, not an antivirus confidence score. A timed-out collector preserves completed sections when available; missing sections are explicitly listed. A collector that fails before the first checkpoint cannot produce an inspection report.
+Conventional PowerShell `-EncodedCommand` payloads are bounded and decoded as UTF-16LE text only, never executed. A port, high CPU use or an unsigned file alone is not a malware verdict. Authorized mining can also match mining rules.
 
-## Reviewing findings safely
+**This application cannot guarantee detection of every miner and does not replace antivirus software.** It is not a kernel-memory, GPU-memory, firmware or full-disk scanner and has no complete antivirus signature database. Protected processes may remain inaccessible even with administrator rights. Partial coverage is explicit; no matches do not prove a clean system. For threats hiding from running Windows, review [Microsoft Defender Offline](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-offline). This app never automatically reboots or remediates the PC.
 
-Verify the executable path, signature, installation source and related persistence together. Preserve a report before making changes. For an unknown miner, disconnect unnecessary network access and seek a second opinion using trusted security software. Do not indiscriminately delete Windows files or reset all permissions. Corporate policy, another antivirus or privacy choices can explain some findings.
+[Methods, limits and primary sources](docs/DETECTION.md) · [Verification](VERIFICATION.md)
 
-Reports stay local and have no remote images, scripts or analytics. Common command-line secrets and usernames in standard profile paths are redacted, but **redaction is incomplete by design**: custom paths, task names and unusual secret formats may remain. Review every report before sharing it. Raw investigation files and personal logs do not belong in this repository.
+## Source and CLI
 
-## Development
+Source execution requires Python 3.10+ with Tkinter; there are no additional runtime packages.
 
-`audit.py` contains pure detection/reporting functions and the CLI; `collect.ps1` only reads Windows state. Tests exercise detection, benign cases, inactive references, policy exclusions, HTML escaping, redaction, report output and exit codes. CI runs on Windows and Linux. No administrator rights or live malware are required for unit tests.
+```powershell
+python gui.py
+python audit.py --lang en
+python audit.py --deep --lang en
+python audit.py --snapshot examples/suspicious.json --lang en --output reports/demo
+python -m unittest discover -s tests -v
+python gui.py --self-test --artifacts gui-artifacts
+```
 
-For security reports, see [SECURITY.md](SECURITY.md). MIT license. Independent project; not affiliated with Microsoft.
+`Start-GUI.cmd` opens the desktop interface; `Start-Audit.cmd` retains console usage. CLI exit codes: `0` no active rule matches, `1` findings, `2` incomplete inspection or failure. The synthetic fixture intentionally exits with code `1`.
+
+## Build the portable EXE
+
+```powershell
+python -m venv .build-env
+.\.build-env\Scripts\python.exe -m pip install -r build-requirements.txt
+.\.build-env\Scripts\python.exe build_windows.py --output dist --work build
+```
+
+Outputs are `dist/WindowsMinerAudit.exe` and `SHA256SUMS.txt`. Source, GUI and packaged EXE are checked separately. The build does not create an installer.
+
+Reports can contain private paths and task names. Common secrets are redacted, but this is not complete anonymization. Review before sharing. MIT · [SECURITY.md](SECURITY.md).

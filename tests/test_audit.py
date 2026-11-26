@@ -81,6 +81,7 @@ class AuditTests(unittest.TestCase):
         for filename in ('README.md', 'README.ru.md', 'README.en.md', 'VERIFICATION.md'):
             page = (ROOT / filename).read_text(encoding='utf-8')
             self.assertNotIn('\ufffd', page)
+            self.assertNotIn('\t',page,'Documentation must not contain accidentally escaped tabs')
             for target in re.findall(r'\]\(([^)]+)\)', page):
                 if '://' not in target and not target.startswith('#'):
                     self.assertTrue((ROOT / target.split('#')[0]).is_file(), f'{filename}: {target}')

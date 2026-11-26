@@ -1,12 +1,18 @@
+param([switch]$Deep)
 # Read-only collector. No downloaded tools, registry writes or process termination.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$result = [ordered]@{ schema_version=1; errors=@() }
+$result = [ordered]@{ schema_version=1; scan_mode=$(if($Deep){'deep'}else{'quick'}); errors=@() }
+$signatureCache=@{}
+$signatureBudgetReported=$false
+$nativeSecurityAvailable=$true
+try { Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop }
+catch { $nativeSecurityAvailable=$false; $result.errors+=('processes: Signature verification unavailable: '+$_.Exception.Message) }
 function Read-Section([string]$name, [scriptblock]$read, $fallback) {
     [Console]::Error.WriteLine('Collecting: '+$name)
     try {
-        if ($name -in @('processes','tasks','startup','hosts','acl_blocks','health')) {
+        if ($name -in @('processes','tasks','startup','hosts','acl_blocks','health','services','wmi','hijacks','connections','performance','startup_files')) {
             $script:result[$name] = @(& $read)
         } else { $script:result[$name] = & $read }
     }
@@ -18,12 +24,19 @@ Read-Section 'processes' {
     @(Get-CimInstance Win32_Process | ForEach-Object {
         $path = $_.ExecutablePath
         $signature = $null
-        # Signature checks only for plausible impersonators outside Windows/Program Files.
+        # Bounded verification: suspicious impersonators in quick mode, up to 40 writable-location executables in extended mode.
         if ($path -and $path -match '\\(ProgramData|AppData|Temp|Users\\Default(?: User)?)\\' -and
-            ($_.Name -match '^(audiodg|taskhostw?|winlogon|svchost|microsofthost|apphost|steamwebhelper)\.exe$' -or
+            ($Deep -or $_.Name -match '^(audiodg|taskhostw?|winlogon|svchost|microsofthost|apphost|steamwebhelper)\.exe$' -or
              $path -match '\\(WindowsTask|ReaItekHD|Windows Tasks Service)\\')) {
-            try { $signature = [string](Get-AuthenticodeSignature -LiteralPath $path).Status }
-            catch { $signature = 'Unavailable'; $script:result.errors += ('Signature unavailable: ' + $path) }
+            if ($signatureCache.ContainsKey($path)) { $signature=$signatureCache[$path] }
+            elseif ($signatureCache.Count -lt 40 -and $nativeSecurityAvailable) {
+                try { $signature = [string](Get-AuthenticodeSignature -LiteralPath $path).Status }
+                catch { $signature = 'Unavailable'; $script:result.errors += ('processes: Signature unavailable: ' + $path) }
+                $signatureCache[$path]=$signature
+            } elseif (!$signatureBudgetReported -and $nativeSecurityAvailable) {
+                $script:result.errors+='processes: Signature verification limited to 40 executable paths.'
+                $signatureBudgetReported=$true
+            }
         }
         [pscustomobject]@{ pid=$_.ProcessId; path=$path; command=$_.CommandLine; signature=$signature }
     })
@@ -107,6 +120,82 @@ Read-Section 'health' {
         @{drive=$_.DeviceID; free_gb=[math]::Round($_.FreeSpace/1GB,2)}
     })
 } @()
+if ($Deep) {
+    Read-Section 'services' {
+        @(Get-CimInstance Win32_Service | ForEach-Object {
+            @{name=$_.Name; command=$_.PathName; enabled=($_.StartMode -ne 'Disabled'); state=$_.State}
+        })
+    } @()
+    Read-Section 'wmi' {
+        $entries=@()
+        foreach ($class in @('CommandLineEventConsumer','ActiveScriptEventConsumer')) {
+            foreach ($consumer in @(Get-CimInstance -Namespace 'root\subscription' -ClassName $class)) {
+                $entries += @{name=$consumer.Name; kind=$class;
+                    command=([string]$consumer.CommandLineTemplate+' '+[string]$consumer.ScriptText)}
+            }
+        }
+        @($entries)
+    } @()
+    Read-Section 'hijacks' {
+        $entries=@()
+        $ifeo='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
+        if (Test-Path -LiteralPath $ifeo) {
+            foreach ($key in Get-ChildItem -LiteralPath $ifeo) {
+                $debugger=$key.GetValue('Debugger')
+                if ($debugger) { $entries+=@{name=$key.PSChildName;kind='IFEO';command=[string]$debugger} }
+            }
+        }
+        $winlogon=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        $shell=([string]$winlogon.Shell).Trim()
+        $userinit=([string]$winlogon.Userinit).Trim().TrimEnd(',')
+        if ($shell -and $shell -ine 'explorer.exe' -and $shell -ine "$env:SystemRoot\explorer.exe") {
+            $entries+=@{name='Winlogon Shell';kind='Winlogon';command=$shell}
+        }
+        if ($userinit -and $userinit -ine "$env:SystemRoot\system32\userinit.exe") {
+            $entries+=@{name='Winlogon Userinit';kind='Winlogon';command=$userinit}
+        }
+        $windows=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows'
+        if ($windows.AppInit_DLLs) { $entries+=@{name='AppInit_DLLs';kind='AppInit';command=[string]$windows.AppInit_DLLs} }
+        @($entries)
+    } @()
+    Read-Section 'connections' {
+        @(Get-NetTCPConnection -State Established -ErrorAction Stop | Where-Object {
+            $_.RemotePort -in @(3333,4444,5555,7777,9999,14444)
+        } | ForEach-Object { @{pid=$_.OwningProcess;port=$_.RemotePort;address=$_.RemoteAddress} })
+    } @()
+    Read-Section 'performance' {
+        $before=@{}; $watch=[Diagnostics.Stopwatch]::StartNew()
+        foreach ($proc in Get-Process) { try { $before[$proc.Id]=$proc.TotalProcessorTime.TotalSeconds } catch {} }
+        Start-Sleep -Milliseconds 1000
+        $elapsed=$watch.Elapsed.TotalSeconds
+        $entries=@()
+        foreach ($proc in Get-Process) {
+            if (!$before.ContainsKey($proc.Id)) { continue }
+            try {
+                $cpu=[math]::Round(100*($proc.TotalProcessorTime.TotalSeconds-$before[$proc.Id])/$elapsed/[Environment]::ProcessorCount,1)
+                if ($cpu -ge 5) { $entries+=@{pid=$proc.Id;cpu_percent=$cpu} }
+            } catch {}
+        }
+        @($entries)
+    } @()
+    Read-Section 'startup_files' {
+        $entries=@(); $shell=New-Object -ComObject WScript.Shell
+        foreach ($folder in @([Environment]::GetFolderPath('Startup'),[Environment]::GetFolderPath('CommonStartup'))) {
+            if (!$folder -or !(Test-Path -LiteralPath $folder)) { continue }
+            foreach ($file in @(Get-ChildItem -LiteralPath $folder -File | Select-Object -First 120)) {
+                $command=$file.FullName
+                if ($file.Extension -ieq '.lnk') {
+                    $shortcut=$shell.CreateShortcut($file.FullName)
+                    $command=([string]$shortcut.TargetPath+' '+[string]$shortcut.Arguments)
+                } elseif ($file.Extension -in @('.ps1','.cmd','.bat','.vbs','.js') -and $file.Length -le 65536) {
+                    $command+=' '+[IO.File]::ReadAllText($file.FullName)
+                }
+                $entries+=@{name=$file.Name;command=$command;enabled=$true}
+            }
+        }
+        @($entries)
+    } @()
+}
 # Explicitly preserve array shape when PowerShell emits zero or one result.
 foreach ($section in @('processes','tasks','startup','hosts','acl_blocks','health')) {
     $result[$section]=@($result[$section])

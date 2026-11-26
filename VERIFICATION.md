@@ -2,20 +2,22 @@
 
 ## Русский
 
-Проверены инструкции, локальные ссылки Markdown и кодировка UTF-8 в русском, английском и общем README. Тесты отдельно проверяют справку, вывод консоли и HTML-отчёт с `--lang ru` и `--lang en`, включая создание отчёта из вымышленного примера. Названия правил и поля JSON сохраняют стабильные машинные идентификаторы на английском.
+Версия 0.2.0 проверена из исходников и как portable EXE: русский/английский, тёмная/светлая тема, минимальный размер окна, настоящие переключатели языка/темы, запуск и отмена проверки, история и сохранение отчётов. Снимки интерфейса содержат помеченные вымышленные данные.
+
+Модульные тесты проверяют признаки CPU/GPU-майнинга, текстовое декодирование PowerShell, службы, WMI, перехваты, сеть/CPU, безопасные случаи, неполную проверку, скрытие типичных секретов, экранирование HTML, UTF-8, ссылки README и команды CLI на обоих языках.
 
 ```powershell
 python -m unittest discover -s tests -v
-python audit.py --lang ru --help
-python audit.py --lang en --help
-python audit.py --snapshot examples/suspicious.json --lang ru --output reports/ru
-python audit.py --snapshot examples/suspicious.json --lang en --output reports/en
+python gui.py --self-test --artifacts gui-artifacts
+python gui.py --benchmark gui-artifacts/idle.json
 ```
 
-Для примера ожидается код завершения `1`: это обнаруженные признаки в тестовом JSON, а не ошибка программы. Сбор с реального Windows-ПК также проверен; недоступные защищённые процессы отражаются как ограничение. Технические сообщения самой ОС могут сохранять исходный язык. Проверка не доказывает отсутствие всех угроз.
+Самопроверка GUI использует имитацию сборщика. Живой сбор Windows проверен отдельно, включая расширенный режим; недоступные защищённые процессы отражаются как неполное покрытие. `--benchmark` измеряет только покой окна: время, CPU одного ядра и рабочую память процесса. Результаты зависят от компьютера и состояния Windows.
 
 ## English
 
-The Russian, English and combined README files are checked for UTF-8 integrity and working local Markdown links. Tests independently exercise help, console output and HTML reports with `--lang ru` and `--lang en`, including report generation from a synthetic fixture. JSON fields and rule names keep stable English machine identifiers.
+Version 0.2.0 was tested from source and as a portable EXE: Russian/English, dark/light themes, minimum window size, actual language/theme controls, start/cancel, report history and saved output. Screenshots contain clearly marked synthetic data.
 
-Run the same commands above. The synthetic example intentionally exits with code `1`, indicating findings rather than execution failure. Live Windows collection was also checked; inaccessible protected processes are recorded as a coverage limitation. Native OS diagnostics may retain their original language. These checks do not prove the absence of all threats.
+Unit tests cover CPU/GPU mining indicators, text-only PowerShell decoding, services, WMI, hooks, network/CPU correlations, benign cases, partial coverage, common-secret redaction, HTML escaping, UTF-8, README links and CLI commands in both languages.
+
+Run the commands above. GUI self-test uses a simulated collector. Live Windows collection was checked separately, including extended mode; inaccessible protected processes remain explicit partial coverage. The benchmark records idle elapsed time, single-core CPU percentage and process working-set memory. Results vary by machine and Windows state.
